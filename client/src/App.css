@@ -256,6 +256,20 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 }
 .chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.welcome-chips {
+  margin: 10px 0 20px 48px;
+  animation: rise 0.4s ease both;
+}
+.welcome-hint {
+  margin: 0 0 10px 4px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+.welcome-chips .suggestions {
+  justify-content: flex-start;
+}
+
 /* ===== Messages ===== */
 .msg-row {
   display: flex;
@@ -812,6 +826,7 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
   .bubble { max-width: 88%; padding: 11px 15px; }
   .avatar { width: 30px; height: 30px; font-size: 0.7rem; }
   .welcome h2 { font-size: 1.25rem; }
+  .welcome-chips { margin-left: 0; }
   .composer textarea { font-size: 16px; } /* prevent iOS auto-zoom */
 }
 

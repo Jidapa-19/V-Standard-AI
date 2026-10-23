@@ -184,10 +184,22 @@ function findCuteThaiVoice(voicesList) {
   return thai[0];
 }
 
+function createInitialGreeting() {
+  return {
+    id: 'welcome-greeting',
+    role: 'assistant',
+    text: 'สวัสดีค่ะ ยินดีต้อนรับพี่ๆ น้องๆ ผู้เข้าอบรมหลักสูตร "มาตรฐานพนักงาน (V)" ทุกท่านนะคะ! 🎓✨\n\nหนูเป็นผู้ช่วย AI ประจำหลักสูตร พร้อมให้ข้อมูลและตอบทุกข้อสงสัยเกี่ยวกับวันเวลาอบรม การเช็คอิน การแต่งกาย สถานที่ และข้อเน้นย้ำต่างๆ ค่ะ สอบถามหนูได้เลยนะคะ~',
+    sources: [
+      { id: 'course_name', category: 'ข้อมูลทั่วไป', topic: 'ชื่อหลักสูตร', value: 'มาตรฐานพนักงาน (V)' },
+      { id: 'greeting', category: 'ข้อมูลทั่วไป', topic: 'การทักทายต้อนรับผู้เข้าอบรม', value: 'ยินดีต้อนรับผู้เข้าอบรมหลักสูตรมาตรฐานพนักงาน (V)' },
+    ],
+  };
+}
+
 /* ---------- App ---------- */
 export default function App() {
   const [theme, setTheme] = useState(readStoredTheme);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState([createInitialGreeting()]);
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]); // { id, file, url }
   const [loading, setLoading] = useState(false);
@@ -615,7 +627,7 @@ export default function App() {
   sendRef.current = send;
 
   const clearHistory = () => {
-    if (!messages.length && !attachments.length) return;
+    if (messages.length <= 1 && !attachments.length) return;
     if (!window.confirm('ต้องการล้างประวัติสนทนาทั้งหมดใช่ไหม?')) return;
     abortRef.current?.abort();
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
@@ -630,7 +642,7 @@ export default function App() {
     setIsListening(false);
     objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
     objectUrlsRef.current.clear();
-    setMessages([]);
+    setMessages([createInitialGreeting()]);
     setAttachments([]);
     setNotice('');
     setLoading(false);
@@ -698,7 +710,7 @@ export default function App() {
             className="icon-btn"
             id="clear-history"
             onClick={clearHistory}
-            disabled={!messages.length && !attachments.length}
+            disabled={messages.length <= 1 && !attachments.length}
             aria-label="ล้างประวัติสนทนา"
             title="ล้างประวัติสนทนา"
           >
@@ -708,13 +720,18 @@ export default function App() {
       </header>
 
       <main className="chat" aria-live="polite">
-        {messages.length === 0 && (
-          <section className="welcome">
-            <div className="welcome-badge">พร้อมช่วยเหลือ</div>
-            <h2>สวัสดีค่ะ มีอะไรให้ช่วยเกี่ยวกับการอบรมไหมคะ</h2>
-            <p>
-              ถามเรื่องวัน เวลา ข้อเน้นย้ำ หรือแนบภาพประกาศเพื่อตรวจสอบกับข้อมูลหลักสูตรได้เลยค่ะ
-            </p>
+        {messages.map((m) => (
+          <MessageBubble
+            key={m.id}
+            message={m}
+            isSpeaking={speakingId === m.id}
+            onToggleSpeak={toggleSpeak}
+          />
+        ))}
+
+        {messages.length <= 1 && (
+          <div className="welcome-chips">
+            <p className="welcome-hint">💡 ตัวอย่างคำถามที่สามารถสอบถามได้:</p>
             <div className="suggestions">
               {SUGGESTIONS.map((s, i) => (
                 <button
@@ -729,17 +746,8 @@ export default function App() {
                 </button>
               ))}
             </div>
-          </section>
+          </div>
         )}
-
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            isSpeaking={speakingId === m.id}
-            onToggleSpeak={toggleSpeak}
-          />
-        ))}
 
         {loading && (
           <div className="msg-row from-ai">
