@@ -136,7 +136,7 @@ export function createApp(options = {}) {
     '/api',
     cors({
       origin(origin, cb) {
-        if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+        if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.onrender.com')) return cb(null, true);
         return cb(new HttpError(403, 'โดเมนนี้ไม่ได้รับอนุญาตให้เรียกใช้งาน API', 'CORS_FORBIDDEN'));
       },
       methods: ['GET', 'POST'],
@@ -282,7 +282,7 @@ const isMain =
 
 if (isMain) {
   const port = Number(process.env.PORT || 3001);
-  const host = process.env.HOST || '127.0.0.1';
+  const host = process.env.HOST || '0.0.0.0';
   const model = (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim();
   const generate = createGeminiGenerator({
     apiKey: process.env.GEMINI_API_KEY,
