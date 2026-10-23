@@ -330,7 +330,7 @@ describe('Admin Knowledge Management API', () => {
     assert.equal(body.ok, true);
   });
 
-  test('GET /api/admin/course requires PIN header', async () => {
+  test('GET /api/admin/course requires authorization', async () => {
     const unauthorized = await fetch(`${srv.base}/api/admin/course`);
     assert.equal(unauthorized.status, 401);
 
@@ -341,5 +341,64 @@ describe('Admin Knowledge Management API', () => {
     const body = await authorized.json();
     assert.ok(Array.isArray(body.facts));
     assert.ok(body.facts.length > 0);
+  });
+
+  test('POST /api/admin/login rejects invalid credentials', async () => {
+    const res = await fetch(`${srv.base}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'wrongpassword' }),
+    });
+    assert.equal(res.status, 401);
+  });
+
+  test('full 2-step auth: login -> face scan -> session token -> access course', async () => {
+    // Step 1: Login
+    const loginRes = await fetch(`${srv.base}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin1234' }),
+    });
+    assert.equal(loginRes.status, 200);
+    const loginBody = await loginRes.json();
+    assert.equal(loginBody.ok, true);
+    assert.equal(loginBody.step, 'face_scan_required');
+    assert.ok(loginBody.challengeToken);
+
+    // Step 2: Face Scan Verification
+    const faceRes = await fetch(`${srv.base}/api/admin/verify-face`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challengeToken: loginBody.challengeToken,
+        isDemo: true,
+      }),
+    });
+    assert.equal(faceRes.status, 200);
+    const faceBody = await faceRes.json();
+    assert.equal(faceBody.ok, true);
+    assert.ok(faceBody.sessionToken);
+    assert.equal(faceBody.user.faceVerified, true);
+
+    // Step 3: Access Course with session token
+    const courseRes = await fetch(`${srv.base}/api/admin/course`, {
+      headers: { 'x-admin-token': faceBody.sessionToken },
+    });
+    assert.equal(courseRes.status, 200);
+    const courseBody = await courseRes.json();
+    assert.ok(Array.isArray(courseBody.facts));
+
+    // Step 4: Logout
+    const logoutRes = await fetch(`${srv.base}/api/admin/logout`, {
+      method: 'POST',
+      headers: { 'x-admin-token': faceBody.sessionToken },
+    });
+    assert.equal(logoutRes.status, 200);
+
+    // Step 5: Course should now be unauthorized with invalidated token
+    const afterLogoutRes = await fetch(`${srv.base}/api/admin/course`, {
+      headers: { 'x-admin-token': faceBody.sessionToken },
+    });
+    assert.equal(afterLogoutRes.status, 401);
   });
 });

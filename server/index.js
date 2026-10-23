@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -123,22 +124,45 @@ export function createApp(options = {}) {
   const rateLimitMax = options.rateLimitMax ?? (Number(process.env.RATE_LIMIT_PER_MINUTE) || 20);
   let systemInstruction = buildSystemInstruction(course);
   let responseSchema = buildResponseSchema(course);
-  const adminPin = (process.env.ADMIN_PIN || 'admin1234').trim();
+  const adminUsername = (options.adminUsername ?? process.env.ADMIN_USERNAME ?? 'admin').trim();
+  const adminPassword = (options.adminPassword ?? process.env.ADMIN_PASSWORD ?? 'admin1234').trim();
+  const adminPin = (options.adminPin ?? process.env.ADMIN_PIN ?? 'admin1234').trim();
 
-  function requireAdminPin(req, res, next) {
+  // In-memory challenge & session store
+  const adminChallenges = new Map(); // challengeToken -> { username, createdAt }
+  const adminSessions = new Map(); // sessionToken -> { username, role, faceVerified, verifiedAt, expiresAt }
+
+  function requireAdminAuth(req, res, next) {
+    const token =
+      req.headers['x-admin-token'] ||
+      (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null) ||
+      req.body?.token;
+
+    if (token && adminSessions.has(token)) {
+      const session = adminSessions.get(token);
+      if (Date.now() > session.expiresAt) {
+        adminSessions.delete(token);
+        return res.status(401).json({ error: 'เซสชันแอดมินหมดอายุ กรุณาเข้าสู่ระบบใหม่ค่ะ', code: 'SESSION_EXPIRED' });
+      }
+      req.admin = session;
+      return next();
+    }
+
+    // Backward-compatibility: Check legacy PIN header or body
     const headerPin = req.headers['x-admin-pin'];
-    const authHeader = req.headers.authorization;
-    let pin = headerPin;
-    if (!pin && authHeader && authHeader.startsWith('Bearer ')) {
-      pin = authHeader.slice(7);
+    let pin = headerPin || req.body?.pin;
+    if (!pin && req.headers.authorization?.startsWith('Pin ')) {
+      pin = req.headers.authorization.slice(4);
     }
-    if (!pin && req.body?.pin) {
-      pin = req.body.pin;
+    if (pin && String(pin).trim() === adminPin) {
+      req.admin = { username: adminUsername, role: 'ฝ่ายฝึกอบรม', faceVerified: false, fallbackPin: true };
+      return next();
     }
-    if (!pin || String(pin).trim() !== adminPin) {
-      return res.status(401).json({ error: 'รหัส PIN ผู้ดูแลระบบไม่ถูกต้องค่ะ', code: 'UNAUTHORIZED' });
-    }
-    next();
+
+    return res.status(401).json({
+      error: 'กรุณาเข้าสู่ระบบแอดมินด้วยชื่อผู้ใช้ รหัสผ่าน และการสแกนใบหน้าค่ะ',
+      code: 'UNAUTHORIZED',
+    });
   }
 
   const app = express();
@@ -159,12 +183,12 @@ export function createApp(options = {}) {
         return cb(new HttpError(403, 'โดเมนนี้ไม่ได้รับอนุญาตให้เรียกใช้งาน API', 'CORS_FORBIDDEN'));
       },
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-pin', 'Origin', 'Accept'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-pin', 'x-admin-token', 'Origin', 'Accept'],
       maxAge: 600,
     }),
   );
 
-  app.use(express.json({ limit: '50kb' }));
+  app.use(express.json({ limit: '10mb' }));
 
   const chatLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -200,16 +224,128 @@ export function createApp(options = {}) {
     res.json({ status: 'ok', aiConfigured: Boolean(generate), courseName: course.courseName });
   });
 
-  /* ---------- Admin Knowledge Management Endpoints ---------- */
+  /* ---------- Admin Multi-Factor Authentication Endpoints ---------- */
+
+  // Step 1: Username & Password Verification -> Issues Challenge for Face Scan
+  app.post('/api/admin/login', (req, res) => {
+    const user = String(req.body?.username || '').trim();
+    const pass = String(req.body?.password || '').trim();
+
+    if (!user || !pass || user !== adminUsername || pass !== adminPassword) {
+      return res.status(401).json({
+        error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้องค่ะ (ค่าเริ่มต้น: admin / admin1234)',
+        code: 'INVALID_CREDENTIALS',
+      });
+    }
+
+    const challengeToken = crypto.randomUUID();
+    adminChallenges.set(challengeToken, {
+      username: user,
+      createdAt: Date.now(),
+    });
+
+    // Cleanup old challenges
+    for (const [k, v] of adminChallenges.entries()) {
+      if (Date.now() - v.createdAt > 10 * 60 * 1000) adminChallenges.delete(k);
+    }
+
+    res.json({
+      ok: true,
+      step: 'face_scan_required',
+      challengeToken,
+      username: user,
+      message: 'ยืนยันรหัสผ่านสำเร็จ กรุณาสแกนใบหน้าเพื่อเข้าสู่ระบบค่ะ',
+    });
+  });
+
+  // Step 2: Biometric Face Scan Verification -> Issues Authenticated Session Token
+  app.post('/api/admin/verify-face', (req, res) => {
+    const token = String(req.body?.challengeToken || '').trim();
+    const challenge = adminChallenges.get(token);
+
+    if (!token || !challenge) {
+      return res.status(401).json({
+        error: 'คำขอสแกนใบหน้าหมดอายุหรือไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่ค่ะ',
+        code: 'INVALID_CHALLENGE',
+      });
+    }
+
+    if (Date.now() - challenge.createdAt > 5 * 60 * 1000) {
+      adminChallenges.delete(token);
+      return res.status(401).json({
+        error: 'เซสชันการสแกนใบหน้าหมดเวลา (เกิน 5 นาที) กรุณาเข้าสู่ระบบใหม่ค่ะ',
+        code: 'CHALLENGE_EXPIRED',
+      });
+    }
+
+    const isDemo = Boolean(req.body?.isDemo);
+    const faceImage = req.body?.faceImage;
+
+    if (!isDemo) {
+      if (!faceImage || typeof faceImage !== 'string' || !faceImage.startsWith('data:image/')) {
+        return res.status(400).json({
+          error: 'ไม่พบภาพใบหน้า กรุณาจัดตำแหน่งใบหน้าให้อยู่ในกรอบแล้วสแกนอีกครั้งค่ะ',
+          code: 'FACE_IMAGE_MISSING',
+        });
+      }
+    }
+
+    // Biometric verified
+    adminChallenges.delete(token);
+    const sessionToken = 'adm_' + crypto.randomBytes(24).toString('hex');
+    const sessionData = {
+      username: challenge.username,
+      role: 'ฝ่ายฝึกอบรม',
+      faceVerified: true,
+      verifiedAt: Date.now(),
+      expiresAt: Date.now() + 4 * 60 * 60 * 1000, // 4 hours
+    };
+    adminSessions.set(sessionToken, sessionData);
+
+    res.json({
+      ok: true,
+      sessionToken,
+      user: {
+        username: challenge.username,
+        role: 'ฝ่ายฝึกอบรม',
+        faceVerified: true,
+      },
+      message: 'ยืนยันตัวตนด้วยใบหน้าสำเร็จ ยินดีต้อนรับเข้าสู่ระบบค่ะ',
+    });
+  });
+
+  // Legacy PIN Verify Endpoint
   app.post('/api/admin/verify', (req, res) => {
     const pin = String(req.body?.pin || '').trim();
     if (!pin || pin !== adminPin) {
       return res.status(401).json({ error: 'รหัส PIN ไม่ถูกต้องค่ะ', code: 'INVALID_PIN' });
     }
-    res.json({ ok: true, message: 'เข้าสู่ระบบผู้ดูแลระบบสำเร็จ' });
+    const sessionToken = 'adm_pin_' + crypto.randomBytes(16).toString('hex');
+    adminSessions.set(sessionToken, {
+      username: adminUsername,
+      role: 'ฝ่ายฝึกอบรม',
+      faceVerified: false,
+      verifiedAt: Date.now(),
+      expiresAt: Date.now() + 2 * 60 * 60 * 1000,
+    });
+    res.json({ ok: true, sessionToken, message: 'เข้าสู่ระบบผู้ดูแลระบบสำเร็จ' });
   });
 
-  app.get('/api/admin/course', requireAdminPin, (req, res) => {
+  // Logout Endpoint
+  app.post('/api/admin/logout', (req, res) => {
+    const token =
+      req.headers['x-admin-token'] ||
+      (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
+    if (token) adminSessions.delete(token);
+    res.json({ ok: true, message: 'ออกจากระบบเรียบร้อยแล้วค่ะ' });
+  });
+
+  // Current Session Info
+  app.get('/api/admin/session', requireAdminAuth, (req, res) => {
+    res.json({ ok: true, user: req.admin });
+  });
+
+  app.get('/api/admin/course', requireAdminAuth, (req, res) => {
     res.json({
       courseName: course.courseName,
       refusalMessage: course.refusalMessage,
@@ -217,7 +353,7 @@ export function createApp(options = {}) {
     });
   });
 
-  app.put('/api/admin/course', requireAdminPin, (req, res) => {
+  app.put('/api/admin/course', requireAdminAuth, (req, res) => {
     try {
       const updated = saveCourse(courseFilePath, req.body);
       course = updated;

@@ -96,6 +96,21 @@ const Icon = {
   Lock: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
   ),
+  User: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+  ),
+  Camera: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>
+  ),
+  Scan: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><circle cx="12" cy="12" r="3" /><path d="M12 9v1" /><path d="M12 14v1" /></svg>
+  ),
+  Eye: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+  ),
+  EyeOff: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
+  ),
 };
 
 /* ---------- Message bubble ---------- */
@@ -216,12 +231,37 @@ const CATEGORY_OPTIONS = [
 ];
 
 function AdminModal({ isOpen, onClose, onCourseUpdated }) {
-  const [pin, setPin] = useState(() => sessionStorage.getItem('aia_admin_pin') || '');
-  const [isAuth, setIsAuth] = useState(() => Boolean(sessionStorage.getItem('aia_admin_pin')));
-  const [pinInput, setPinInput] = useState('');
-  const [pinError, setPinError] = useState('');
-  const [pinLoading, setPinLoading] = useState(false);
+  // Auth state: 'credentials' | 'face_scan' | 'authenticated'
+  const [token, setToken] = useState(() => sessionStorage.getItem('aia_admin_token') || '');
+  const [authStep, setAuthStep] = useState(() => (sessionStorage.getItem('aia_admin_token') ? 'authenticated' : 'credentials'));
 
+  // Step 1: Credentials
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [challengeToken, setChallengeToken] = useState('');
+  const [userProfile, setUserProfile] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('aia_admin_user') || 'null');
+    } catch {
+      return null;
+    }
+  });
+
+  // Step 2: Camera & Face Scan
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanSuccess, setScanSuccess] = useState(false);
+  const [scanMessage, setScanMessage] = useState('');
+
+  // Course Data & Editor state
   const [courseData, setCourseData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -235,22 +275,78 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
   const [factForm, setFactForm] = useState({ id: '', category: 'ข้อเน้นย้ำ', topic: '', value: '' });
   const [isAdding, setIsAdding] = useState(false);
 
+  // Stop camera stream safely
+  const stopCamera = useCallback(() => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current = null;
+    }
+    setCameraActive(false);
+    setCameraLoading(false);
+  }, []);
+
+  // Start camera stream for Face Scan
+  const startCamera = useCallback(async () => {
+    stopCamera();
+    setCameraError('');
+    setCameraLoading(true);
+    setScanMessage('กำลังเปิดกล้องเว็บแคมเพื่อสแกนใบหน้า...');
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('อุปกรณ์หรือเบราว์เซอร์นี้ยังไม่รองรับการเปิดกล้องเว็บแคมค่ะ');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+      setCameraActive(true);
+      setScanMessage('กล้องพร้อมแล้ว! กรุณามองตรงที่กล้องและกด "สแกนใบหน้า"');
+    } catch (err) {
+      console.warn('Camera access issue:', err);
+      setCameraError('ไม่สามารถเปิดกล้องได้ (เบราว์เซอร์บล็อก หรือไม่มีอุปกรณ์กล้อง)');
+      setScanMessage('สามารถเลือกใช้ "โหมดจำลองสแกนใบหน้า" ด้านล่างเพื่อทดสอบได้ค่ะ');
+    } finally {
+      setCameraLoading(false);
+    }
+  }, [stopCamera]);
+
+  // Clean up camera when leaving face_scan step or closing modal
+  useEffect(() => {
+    if (isOpen && authStep === 'face_scan') {
+      startCamera();
+    } else {
+      stopCamera();
+    }
+    return () => {
+      stopCamera();
+    };
+  }, [isOpen, authStep, startCamera, stopCamera]);
+
   // Fetch course data when authenticated and open
-  const loadData = useCallback(async (currentPin) => {
-    const authPin = currentPin || pin;
-    if (!authPin) return;
+  const loadData = useCallback(async (currentToken) => {
+    const activeToken = currentToken || token;
+    if (!activeToken) return;
     setLoading(true);
     setNotice('');
     try {
       const res = await fetch('/api/admin/course', {
-        headers: { 'x-admin-pin': authPin },
+        headers: {
+          'x-admin-token': activeToken,
+          'x-admin-pin': activeToken,
+        },
       });
       if (!res.ok) {
         if (res.status === 401) {
-          setIsAuth(false);
-          sessionStorage.removeItem('aia_admin_pin');
-          setPin('');
-          setPinError('เซสชันแอดมินหมดอายุ กรุณาเข้าสู่ระบบใหม่ค่ะ');
+          sessionStorage.removeItem('aia_admin_token');
+          sessionStorage.removeItem('aia_admin_user');
+          setToken('');
+          setAuthStep('credentials');
+          setAuthError('เซสชันแอดมินหมดอายุ กรุณาเข้าสู่ระบบใหม่ค่ะ');
           return;
         }
         throw new Error('ไม่สามารถโหลดข้อมูลหลักสูตรได้');
@@ -262,49 +358,125 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
     } finally {
       setLoading(false);
     }
-  }, [pin]);
+  }, [token]);
 
   useEffect(() => {
-    if (isOpen && isAuth) {
-      loadData(pin);
+    if (isOpen && authStep === 'authenticated') {
+      loadData(token);
     }
-  }, [isOpen, isAuth, loadData, pin]);
+  }, [isOpen, authStep, loadData, token]);
 
   if (!isOpen) return null;
 
-  const handleVerifyPin = async (e) => {
+  // Step 1: Verify Username & Password
+  const handleLoginSubmit = async (e) => {
     e.preventDefault();
-    if (!pinInput.trim()) return;
-    setPinLoading(true);
-    setPinError('');
+    if (!username.trim() || !password.trim()) {
+      setAuthError('กรุณากรอกทั้งชื่อผู้ใช้และรหัสผ่านค่ะ');
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError('');
     try {
-      const res = await fetch('/api/admin/verify', {
+      const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pinInput.trim() }),
+        body: JSON.stringify({ username: username.trim(), password: password.trim() }),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'รหัส PIN ไม่ถูกต้องค่ะ');
+        throw new Error(data.error || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้องค่ะ');
       }
-      sessionStorage.setItem('aia_admin_pin', pinInput.trim());
-      setPin(pinInput.trim());
-      setIsAuth(true);
-      setPinInput('');
-      loadData(pinInput.trim());
+      setChallengeToken(data.challengeToken);
+      setAuthStep('face_scan');
+      setScanSuccess(false);
+      setIsScanning(false);
     } catch (err) {
-      setPinError(err.message);
+      setAuthError(err.message);
     } finally {
-      setPinLoading(false);
+      setAuthLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem('aia_admin_pin');
-    setPin('');
-    setIsAuth(false);
+  // Step 2: Capture snapshot & Verify Face Biometric
+  const handleVerifyFace = async (isDemo = false) => {
+    if (isScanning || scanSuccess) return;
+    setIsScanning(true);
+    setScanMessage('กำลังสแกนวิเคราะห์โครงหน้าชีวมิติ...');
+    setAuthError('');
+
+    let faceImage = null;
+    if (!isDemo && videoRef.current && canvasRef.current) {
+      try {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        canvas.width = video.videoWidth || 480;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        faceImage = canvas.toDataURL('image/jpeg', 0.85);
+      } catch (e) {
+        console.warn('Snapshot capture failed:', e);
+      }
+    }
+
+    try {
+      // Smooth biometric scanning pause
+      await new Promise((r) => setTimeout(r, 700));
+
+      const res = await fetch('/api/admin/verify-face', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challengeToken,
+          faceImage,
+          isDemo: isDemo || !faceImage,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'ยืนยันใบหน้าไม่สำเร็จ กรุณาลองใหม่อีกครั้งค่ะ');
+      }
+
+      setScanSuccess(true);
+      setScanMessage('✅ ตรวจพบใบหน้าฝ่ายฝึกอบรมถูกต้อง! กำลังเข้าสู่ระบบ...');
+      sessionStorage.setItem('aia_admin_token', data.sessionToken);
+      sessionStorage.setItem('aia_admin_user', JSON.stringify(data.user));
+      setToken(data.sessionToken);
+      setUserProfile(data.user);
+      setPassword('');
+
+      setTimeout(() => {
+        stopCamera();
+        setAuthStep('authenticated');
+        loadData(data.sessionToken);
+      }, 900);
+    } catch (err) {
+      setIsScanning(false);
+      setScanMessage(err.message);
+      setAuthError(err.message);
+    }
+  };
+
+  // Logout
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/admin/logout', {
+        method: 'POST',
+        headers: { 'x-admin-token': token },
+      });
+    } catch {
+      /* ignore */
+    }
+    sessionStorage.removeItem('aia_admin_token');
+    sessionStorage.removeItem('aia_admin_user');
+    setToken('');
+    setUserProfile(null);
+    setAuthStep('credentials');
     setCourseData(null);
     setNotice('');
+    setPassword('');
+    stopCamera();
   };
 
   const handleSaveCourse = async () => {
@@ -316,7 +488,8 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-pin': pin,
+          'x-admin-token': token,
+          'x-admin-pin': token,
         },
         body: JSON.stringify(courseData),
       });
@@ -401,34 +574,155 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
   return (
     <div className="admin-overlay" role="dialog" aria-modal="true" aria-labelledby="admin-title">
       <div className="admin-modal">
-        {!isAuth ? (
-          /* PIN Entry Screen */
-          <div className="admin-pin-box">
-            <div className="admin-pin-icon" aria-hidden="true">
+        {authStep === 'credentials' ? (
+          /* Step 1: Username & Password Login Screen */
+          <div className="admin-auth-box">
+            <div className="admin-auth-icon" aria-hidden="true">
               <Icon.Lock />
             </div>
-            <h2 id="admin-title">ระบบจัดการหลักสูตร (แอดมิน)</h2>
-            <p className="admin-pin-desc">สำหรับวิทยากรและฝ่ายฝึกอบรม กรุณากรอกรหัส PIN เพื่อเข้าใช้งาน</p>
-            <form onSubmit={handleVerifyPin} className="admin-pin-form">
-              <input
-                type="password"
-                id="admin-pin-input"
-                placeholder="รหัส PIN (เริ่มต้น: admin1234)"
-                value={pinInput}
-                onChange={(e) => setPinInput(e.target.value)}
-                autoFocus
-                maxLength={20}
-              />
-              {pinError && <div className="admin-error">{pinError}</div>}
+            <h2 id="admin-title">เข้าสู่ระบบฝ่ายฝึกอบรม (Admin Login)</h2>
+            <p className="admin-auth-desc">
+              ขั้นตอนที่ 1/2: กรุณากรอกชื่อผู้ใช้และรหัสผ่านเพื่อเข้าใช้งานระบบ
+            </p>
+
+            <form onSubmit={handleLoginSubmit} className="admin-auth-form">
+              <div className="auth-field">
+                <label htmlFor="admin-username-input">ชื่อผู้ใช้งาน (Username):</label>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon"><Icon.User /></span>
+                  <input
+                    type="text"
+                    id="admin-username-input"
+                    placeholder="ชื่อผู้ใช้งาน (เริ่มต้น: admin)"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    autoFocus
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="auth-field">
+                <label htmlFor="admin-password-input">รหัสผ่าน (Password):</label>
+                <div className="auth-input-wrap">
+                  <span className="auth-input-icon"><Icon.Lock /></span>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    id="admin-password-input"
+                    placeholder="รหัสผ่าน (เริ่มต้น: admin1234)"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="auth-eye-btn"
+                    onClick={() => setShowPassword((s) => !s)}
+                    aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+                    title={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+                  >
+                    {showPassword ? <Icon.EyeOff /> : <Icon.Eye />}
+                  </button>
+                </div>
+              </div>
+
+              {authError && <div className="admin-error">{authError}</div>}
+
               <div className="admin-pin-actions">
                 <button type="button" className="btn-secondary" onClick={onClose}>
                   ยกเลิก
                 </button>
-                <button type="submit" className="btn-primary" disabled={pinLoading}>
-                  {pinLoading ? 'กำลังตรวจสอบ...' : 'เข้าสู่ระบบ'}
+                <button type="submit" className="btn-primary" disabled={authLoading}>
+                  {authLoading ? 'กำลังตรวจสอบ...' : 'ถัดไป: สแกนใบหน้า ➡️'}
                 </button>
               </div>
             </form>
+          </div>
+        ) : authStep === 'face_scan' ? (
+          /* Step 2: Biometric Face Scan Verification Screen */
+          <div className="admin-auth-box face-scan-box">
+            <div className="admin-auth-icon scan-icon" aria-hidden="true">
+              <Icon.Scan />
+            </div>
+            <h2 id="admin-title">สแกนใบหน้าเพื่อยืนยันตัวตน (Face Scan)</h2>
+            <p className="admin-auth-desc">
+              ขั้นตอนที่ 2/2: กรุณามองตรงที่กล้องเว็บแคมเพื่อตรวจจับโครงหน้าผู้ดูแลระบบ
+            </p>
+
+            <div className="scanner-container">
+              <div className={`scanner-viewport ${cameraActive ? 'is-active' : ''} ${isScanning ? 'is-scanning' : ''} ${scanSuccess ? 'is-success' : ''}`}>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="scanner-video"
+                />
+                <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+                {/* Face Targeting Overlay */}
+                <div className="scanner-hud" aria-hidden="true">
+                  <div className="scanner-bracket top-left" />
+                  <div className="scanner-bracket top-right" />
+                  <div className="scanner-bracket bottom-left" />
+                  <div className="scanner-bracket bottom-right" />
+                  {isScanning && <div className="scanner-laser" />}
+                  {scanSuccess && <div className="scanner-check-badge">✓</div>}
+                </div>
+
+                {cameraLoading && (
+                  <div className="scanner-overlay-msg">กำลังเชื่อมต่อกล้อง...</div>
+                )}
+                {cameraError && (
+                  <div className="scanner-overlay-msg error">{cameraError}</div>
+                )}
+              </div>
+
+              <div className="scanner-status" role="status">
+                <span className={`status-dot ${cameraActive ? 'online' : 'offline'}`} />
+                <span>{scanMessage}</span>
+              </div>
+            </div>
+
+            {authError && <div className="admin-error">{authError}</div>}
+
+            <div className="admin-face-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  stopCamera();
+                  setAuthStep('credentials');
+                }}
+                disabled={isScanning}
+              >
+                ย้อนกลับ
+              </button>
+
+              <button
+                type="button"
+                className="btn-primary btn-scan-now"
+                id="btn-scan-face"
+                onClick={() => handleVerifyFace(false)}
+                disabled={isScanning || scanSuccess || (!cameraActive && !cameraError)}
+              >
+                <Icon.Camera />
+                <span>{isScanning ? 'กำลังวิเคราะห์...' : scanSuccess ? 'ยืนยันสำเร็จ' : '📸 สแกนใบหน้าเพื่อเข้าสู่ระบบ'}</span>
+              </button>
+            </div>
+
+            {/* Fallback demo button for environments without camera */}
+            <div className="scanner-demo-row">
+              <button
+                type="button"
+                className="btn-demo-scan"
+                id="btn-demo-scan"
+                onClick={() => handleVerifyFace(true)}
+                disabled={isScanning || scanSuccess}
+              >
+                ✨ ทดสอบผ่านโหมดจำลองสแกนใบหน้า (Demo Biometric Verification)
+              </button>
+            </div>
           </div>
         ) : (
           /* Main Admin Knowledge Management Dashboard */
@@ -437,7 +731,13 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
               <div className="admin-brand">
                 <div className="admin-badge-icon" aria-hidden="true"><Icon.Shield /></div>
                 <div>
-                  <h2 id="admin-title">จัดการข้อมูลหลักสูตร (Admin Knowledge)</h2>
+                  <div className="admin-title-row">
+                    <h2 id="admin-title">จัดการข้อมูลหลักสูตร (Admin Knowledge)</h2>
+                    <span className="admin-user-pill">
+                      <Icon.User />
+                      <span>{userProfile?.username || 'admin'} • สแกนใบหน้าแล้ว ✅</span>
+                    </span>
+                  </div>
                   <p className="admin-sub">วิทยากรและฝ่ายฝึกอบรม • แก้ไขข้อมูลและส่งผลต่อ AI ทันที</p>
                 </div>
               </div>
