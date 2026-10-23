@@ -1,0 +1,122 @@
+import fs from 'node:fs';
+
+export const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB per image
+export const MAX_FILES = 3;
+export const MAX_MESSAGE_LENGTH = 1000;
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** Detects the real image type from file content (magic bytes). */
+export function detectImageType(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.subarray(0, 8).equals(PNG_SIGNATURE)) return 'image/png';
+  if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
+
+function deepFreeze(obj) {
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === 'object') deepFreeze(value);
+  }
+  return Object.freeze(obj);
+}
+
+/** Loads and validates course.json from the server file system. */
+export function loadCourse(filePath) {
+  const course = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (typeof course.courseName !== 'string' || typeof course.refusalMessage !== 'string') {
+    throw new Error('course.json: courseName and refusalMessage are required');
+  }
+  if (!Array.isArray(course.facts) || course.facts.length === 0) {
+    throw new Error('course.json: facts must be a non-empty array');
+  }
+  const ids = new Set();
+  for (const f of course.facts) {
+    if (!f.id || !f.topic || !f.value) throw new Error('course.json: each fact needs id, topic, value');
+    if (ids.has(f.id)) throw new Error(`course.json: duplicate fact id "${f.id}"`);
+    ids.add(f.id);
+  }
+  return deepFreeze(course);
+}
+
+const THAI_DIGITS = '๐๑๒๓๔๕๖๗๘๙';
+
+export function toArabicDigits(text) {
+  return text.replace(/[๐-๙]/g, (d) => String(THAI_DIGITS.indexOf(d)));
+}
+
+/** Extracts numeric tokens ("08.30" -> {"8","30"}), ignoring list markers like "1. ". */
+export function extractNumbers(text) {
+  const cleaned = toArabicDigits(String(text ?? '')).replace(/^\s*\d+[.)]\s+/gm, '');
+  return new Set((cleaned.match(/\d+/g) ?? []).map((n) => String(Number(n))));
+}
+
+/** Ensures the answer ends with "ค่ะ". */
+export function ensurePoliteEnding(text) {
+  let t = text.trim();
+  if (/ค่ะ[.!]?$/.test(t)) return t;
+  // Keep periods: Thai abbreviations such as "น." end with one.
+  t = t.replace(/(ครับ|คะ)[.!]?$/, '').replace(/[\s!]+$/, '');
+  return `${t} ค่ะ`;
+}
+
+/**
+ * Verifies the model's structured output against course.json.
+ * Any failure returns the exact refusal message from course.json.
+ */
+export function verifyModelResult(raw, course, { message, hasImages }) {
+  const refuse = (reason) => ({
+    answer: course.refusalMessage,
+    refused: true,
+    reason,
+    sources: [],
+  });
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return refuse('invalid_model_output');
+  }
+  if (!data || typeof data !== 'object') return refuse('invalid_model_output');
+
+  if (hasImages && data.imageReadable !== true) return refuse('image_unreadable');
+  if (data.answerable !== true) return refuse('not_in_course');
+
+  const factMap = new Map(course.facts.map((f) => [f.id, f]));
+  const citedIds = Array.isArray(data.citedFactIds)
+    ? [...new Set(data.citedFactIds.filter((id) => typeof id === 'string' && factMap.has(id)))]
+    : [];
+  if (citedIds.length === 0) return refuse('no_supporting_fact');
+
+  const answer = typeof data.answer === 'string' ? data.answer.trim() : '';
+  if (!answer || answer.length > 1500) return refuse('empty_answer');
+  if (answer.includes(course.refusalMessage)) return refuse('model_refused');
+  if (!/[\u0E00-\u0E7F]/.test(answer)) return refuse('not_thai');
+
+  // Every number in the answer must come from a cited fact, the user's question,
+  // or text read from the attached image. This blocks invented dates/times.
+  const citedText = citedIds.map((id) => `${factMap.get(id).topic} ${factMap.get(id).value}`).join(' ');
+  const allowedNumbers = new Set([
+    ...extractNumbers(citedText),
+    ...extractNumbers(message),
+    ...(hasImages ? extractNumbers(data.imageText) : []),
+  ]);
+  for (const n of extractNumbers(answer)) {
+    if (!allowedNumbers.has(n)) return refuse('unsupported_number');
+  }
+
+  return {
+    answer: ensurePoliteEnding(answer),
+    refused: false,
+    reason: null,
+    sources: citedIds.map((id) => {
+      const f = factMap.get(id);
+      return { id: f.id, category: f.category, topic: f.topic, value: f.value };
+    }),
+  };
+}
