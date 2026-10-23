@@ -75,6 +75,9 @@ const Icon = {
   Mic: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" x2="12" y1="19" y2="22" /></svg>
   ),
+  Sparkle: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" /></svg>
+  ),
   Volume: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
   ),
@@ -160,6 +163,27 @@ function MessageBubble({ message, isSpeaking, onToggleSpeak }) {
   );
 }
 
+/* ---------- Voice utilities ---------- */
+function findCuteThaiVoice(voicesList) {
+  const list = voicesList && voicesList.length ? voicesList : (window.speechSynthesis?.getVoices() || []);
+  const thai = list.filter((v) =>
+    v.lang === 'th-TH' || v.lang.startsWith('th') || v.name.toLowerCase().includes('thai') || v.name.includes('ไทย')
+  );
+  if (!thai.length) return null;
+
+  // Best Thai female voices priority:
+  // 1. Premwadee (Microsoft Edge / Windows Natural - sweet, soft & natural)
+  // 2. Achara (Microsoft Thai female)
+  // 3. Kanya (Apple iOS/macOS Thai female)
+  // 4. Any voice with 'female' / 'google'
+  const keywords = ['premwadee', 'เปรมวดี', 'achara', 'อัจฉรา', 'kanya', 'กัญญา', 'female', 'google'];
+  for (const kw of keywords) {
+    const match = thai.find((v) => v.name.toLowerCase().includes(kw));
+    if (match) return match;
+  }
+  return thai[0];
+}
+
 /* ---------- App ---------- */
 export default function App() {
   const [theme, setTheme] = useState(readStoredTheme);
@@ -170,7 +194,9 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [dragging, setDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [handsFree, setHandsFree] = useState(false);
   const [speakingId, setSpeakingId] = useState(null);
+  const [voices, setVoices] = useState([]);
 
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
@@ -178,6 +204,11 @@ export default function App() {
   const abortRef = useRef(null);
   const objectUrlsRef = useRef(new Set());
   const recognitionRef = useRef(null);
+  const handsFreeRef = useRef(false);
+  const isLoadingRef = useRef(false);
+  const isSpeakingRef = useRef(false);
+  const silenceTimerRef = useRef(null);
+  const sendRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -192,12 +223,36 @@ export default function App() {
     listEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, loading]);
 
-  // Revoke object URLs and stop audio on unmount.
+  useEffect(() => {
+    handsFreeRef.current = handsFree;
+  }, [handsFree]);
+
+  useEffect(() => {
+    isLoadingRef.current = loading;
+  }, [loading]);
+
+  // Load available speech synthesis voices asynchronously
+  useEffect(() => {
+    const loadVoices = () => {
+      const v = window.speechSynthesis?.getVoices() || [];
+      if (v.length) setVoices(v);
+    };
+    loadVoices();
+    if (window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+    return () => {
+      if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
+  // Revoke object URLs and stop audio / recognition on unmount.
   useEffect(() => {
     const urls = objectUrlsRef.current;
     return () => {
       urls.forEach((u) => URL.revokeObjectURL(u));
       urls.clear();
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       window.speechSynthesis?.cancel();
       try {
         recognitionRef.current?.stop();
@@ -207,10 +262,182 @@ export default function App() {
     };
   }, []);
 
-  const toggleVoiceInput = () => {
+  // Speak text with cute, sweet female voice parameters
+  const speakCuteText = useCallback(
+    (text, id, onComplete) => {
+      if (!window.speechSynthesis) {
+        setNotice('เบราว์เซอร์ของคุณยังไม่รองรับระบบอ่านออกเสียงค่ะ');
+        onComplete?.();
+        return;
+      }
+
+      // Temporarily stop microphone so it does not hear the speaker's own output
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      setIsListening(false);
+      window.speechSynthesis.cancel();
+
+      // Clean markdown, bullet dashes, and numbers for fluid, natural Thai pronunciation
+      const cleanText = text
+        .replace(/\*\*/g, '')
+        .replace(/^[-\s*•#\d.]+/gm, '')
+        .replace(/อ้างอิงข้อมูลหลักสูตร.*$/gs, '')
+        .trim();
+
+      if (!cleanText) {
+        onComplete?.();
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'th-TH';
+      // Pitch: 1.35 creates a sweet, cheerful, youthful female tone
+      utterance.pitch = 1.35;
+      // Rate: 1.05 provides natural, lively cadence
+      utterance.rate = 1.05;
+
+      const cuteVoice = findCuteThaiVoice(voices);
+      if (cuteVoice) utterance.voice = cuteVoice;
+
+      utterance.onstart = () => {
+        setSpeakingId(id || 'cute-voice');
+        isSpeakingRef.current = true;
+      };
+
+      const handleDone = () => {
+        setSpeakingId(null);
+        isSpeakingRef.current = false;
+        onComplete?.();
+      };
+
+      utterance.onend = handleDone;
+      utterance.onerror = handleDone;
+
+      window.speechSynthesis.speak(utterance);
+    },
+    [voices],
+  );
+
+  const startRecognition = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'th-TH';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        if (handsFreeRef.current) {
+          setNotice('🎙️ โหมดคุยอัตโนมัติ: พูดคำถามได้เลยค่ะ (หยุดพูด 1.3 วิ ระบบจะส่งคำถามให้อัตโนมัติ)');
+        } else {
+          setNotice('🎙️ กำลังฟังเสียง... พูดคำถามได้เลยค่ะ');
+        }
+      };
+
+      recognition.onresult = (event) => {
+        let interimText = '';
+        let finalText = '';
+
+        for (let i = 0; i < event.results.length; ++i) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            finalText += res[0].transcript;
+          } else {
+            interimText += res[0].transcript;
+          }
+        }
+
+        const transcript = (finalText || interimText).trim();
+        if (transcript) {
+          setInput(transcript);
+
+          // In hands-free mode, auto-send after 1.3 seconds of pause
+          if (handsFreeRef.current) {
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = setTimeout(() => {
+              if (handsFreeRef.current && !isLoadingRef.current && !isSpeakingRef.current && transcript.length > 0) {
+                sendRef.current?.(transcript);
+              }
+            }, 1300);
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'not-allowed') {
+          setIsListening(false);
+          setHandsFree(false);
+          handsFreeRef.current = false;
+          setNotice('กรุณากดอนุญาตให้เบราว์เซอร์เข้าถึงไมโครโฟน เพื่อสั่งการด้วยเสียงนะคะ');
+        } else if (event.error !== 'no-speech') {
+          console.warn('Speech recognition notice:', event.error);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        // If in hands-free mode and not speaking or waiting for AI, restart listening seamlessly
+        if (handsFreeRef.current && !isLoadingRef.current && !isSpeakingRef.current) {
+          setTimeout(() => {
+            if (handsFreeRef.current && !isLoadingRef.current && !isSpeakingRef.current) {
+              startRecognition();
+            }
+          }, 350);
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.warn('Recognition start failed:', err);
+      setIsListening(false);
+    }
+  }, []);
+
+  const toggleHandsFree = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setNotice('เบราว์เซอร์นี้ยังไม่รองรับระบบสั่งการด้วยเสียง แนะนำให้ใช้งานบน Google Chrome หรือ Microsoft Edge ค่ะ');
+      setNotice('เบราว์เซอร์นี้ยังไม่รองรับระบบสั่งการด้วยเสียง แนะนำให้เปิดบน Google Chrome หรือ Microsoft Edge ค่ะ');
+      return;
+    }
+
+    if (handsFree) {
+      setHandsFree(false);
+      handsFreeRef.current = false;
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      window.speechSynthesis?.cancel();
+      setSpeakingId(null);
+      isSpeakingRef.current = false;
+      setIsListening(false);
+      setNotice('ปิดโหมดคุยอัตโนมัติแล้วค่ะ (สามารถกดปุ่มไมค์เพื่อพูดทีละคำถามได้)');
+    } else {
+      setHandsFree(true);
+      handsFreeRef.current = true;
+      setNotice('✨ เปิดโหมดคุยอัตโนมัติแล้ว! พูดคำถามได้เลยค่ะ ไม่ต้องกดปุ่มใดๆ');
+      startRecognition();
+    }
+  };
+
+  const toggleVoiceInput = () => {
+    if (handsFree) {
+      toggleHandsFree();
       return;
     }
 
@@ -224,75 +451,31 @@ export default function App() {
       return;
     }
 
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'th-TH';
-      recognition.continuous = false;
-      recognition.interimResults = false;
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setNotice('🎙️ กำลังฟังเสียง... พูดคำถามได้เลยค่ะ');
-      };
-
-      recognition.onresult = (event) => {
-        const transcript = event.results[0]?.[0]?.transcript;
-        if (transcript) {
-          setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
-        }
-      };
-
-      recognition.onerror = (event) => {
-        setIsListening(false);
-        if (event.error === 'not-allowed') {
-          setNotice('กรุณากดอนุญาตให้เบราว์เซอร์เข้าถึงไมโครโฟนเพื่อพูดคำถามค่ะ');
-        } else if (event.error !== 'no-speech') {
-          setNotice(`ระบบรับเสียงขัดข้อง (${event.error})`);
-        }
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-        setNotice('');
-        textareaRef.current?.focus();
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.warn('Speech recognition start failed:', err);
-      setIsListening(false);
-    }
+    startRecognition();
   };
 
   const toggleSpeak = (id, text) => {
-    if (!window.speechSynthesis) {
-      setNotice('เบราว์เซอร์ของคุณยังไม่รองรับระบบอ่านออกเสียงค่ะ');
-      return;
-    }
-
     if (speakingId === id) {
-      window.speechSynthesis.cancel();
+      window.speechSynthesis?.cancel();
       setSpeakingId(null);
+      isSpeakingRef.current = false;
       return;
     }
+    speakCuteText(text, id);
+  };
 
-    window.speechSynthesis.cancel();
-    // Clean list markers for a more natural spoken voice
-    const cleanText = text.replace(/^[-\s*]+/gm, '').trim();
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = 'th-TH';
-    utterance.rate = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const thaiVoice = voices.find((v) => v.lang === 'th-TH' || v.lang.startsWith('th'));
-    if (thaiVoice) utterance.voice = thaiVoice;
-
-    utterance.onend = () => setSpeakingId(null);
-    utterance.onerror = () => setSpeakingId(null);
-
-    setSpeakingId(id);
-    window.speechSynthesis.speak(utterance);
+  const testCuteVoice = () => {
+    if (speakingId === 'test') {
+      window.speechSynthesis?.cancel();
+      setSpeakingId(null);
+      isSpeakingRef.current = false;
+      return;
+    }
+    const sample = 'สวัสดีค่ะ หนูเป็นผู้ช่วยหลักสูตรมาตรฐานพนักงาน ยินดีที่ได้คุยด้วยนะคะ ถามหนูได้เลยค่ะ~ ✨';
+    setNotice('💖 กำลังทดสอบเสียงผู้ช่วยสาวน้อยน่ารัก...');
+    speakCuteText(sample, 'test', () => {
+      setNotice('');
+    });
   };
 
   const resizeTextarea = useCallback(() => {
@@ -353,6 +536,14 @@ export default function App() {
       return;
     }
 
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    setIsListening(false);
+
     const files = attachments;
     setMessages((prev) => [
       ...prev,
@@ -362,6 +553,7 @@ export default function App() {
     setAttachments([]);
     setNotice('');
     setLoading(true);
+    isLoadingRef.current = true;
 
     const form = new FormData();
     if (text) form.append('message', text);
@@ -381,16 +573,30 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data?.error || `เซิร์ฟเวอร์ตอบกลับผิดพลาด (HTTP ${res.status})`);
       }
+      const assistantId = uid();
       setMessages((prev) => [
         ...prev,
         {
-          id: uid(),
+          id: assistantId,
           role: 'assistant',
           text: data.answer,
           sources: data.sources ?? [],
           refused: Boolean(data.refused),
         },
       ]);
+
+      // If in hands-free mode, auto-read answer in cute voice and then re-open mic!
+      if (handsFreeRef.current && data.answer) {
+        speakCuteText(data.answer, assistantId, () => {
+          if (handsFreeRef.current && !isLoadingRef.current) {
+            setTimeout(() => {
+              if (handsFreeRef.current && !isLoadingRef.current) {
+                startRecognition();
+              }
+            }, 400);
+          }
+        });
+      }
     } catch (err) {
       if (err.name === 'AbortError') return;
       const msg =
@@ -401,16 +607,21 @@ export default function App() {
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
+      isLoadingRef.current = false;
       textareaRef.current?.focus();
     }
   };
+
+  sendRef.current = send;
 
   const clearHistory = () => {
     if (!messages.length && !attachments.length) return;
     if (!window.confirm('ต้องการล้างประวัติสนทนาทั้งหมดใช่ไหม?')) return;
     abortRef.current?.abort();
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     window.speechSynthesis?.cancel();
     setSpeakingId(null);
+    isSpeakingRef.current = false;
     try {
       recognitionRef.current?.stop();
     } catch {
@@ -423,6 +634,7 @@ export default function App() {
     setAttachments([]);
     setNotice('');
     setLoading(false);
+    isLoadingRef.current = false;
   };
 
   const onKeyDown = (e) => {
@@ -571,6 +783,33 @@ export default function App() {
           </div>
         )}
 
+        <div className="voice-bar">
+          <button
+            type="button"
+            className={`voice-mode-btn ${handsFree ? 'is-active' : ''}`}
+            id="hands-free-toggle"
+            onClick={toggleHandsFree}
+            aria-label={handsFree ? 'ปิดโหมดคุยอัตโนมัติ' : 'เปิดโหมดคุยอัตโนมัติ (พูดได้เลยไม่ต้องกดไมค์)'}
+            title={handsFree ? 'คลิกเพื่อปิดโหมดคุยอัตโนมัติ' : 'คลิกเพื่อเปิดโหมดพูดคุยต่อเนื่อง ไม่ต้องกดปุ่มไมค์'}
+          >
+            <span className={`status-indicator ${handsFree ? 'live' : ''}`} />
+            <Icon.Mic />
+            <span className="mode-text">
+              {handsFree ? 'โหมดคุยอัตโนมัติ: เปิดอยู่ (พูดได้เลย)' : 'โหมดคุยอัตโนมัติ (Hands-Free)'}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`test-voice-btn ${speakingId === 'test' ? 'is-playing' : ''}`}
+            id="test-voice-btn"
+            onClick={testCuteVoice}
+            title="ทดสอบเสียงผู้ช่วยสาวน้อยน่ารัก"
+          >
+            <Icon.Sparkle />
+            <span>{speakingId === 'test' ? 'กำลังพูด...' : 'เสียงสาวน้อยน่ารัก 💖'}</span>
+          </button>
+        </div>
+
         <form
           className="composer"
           onSubmit={(e) => {
@@ -603,12 +842,12 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={`icon-btn mic-btn ${isListening ? 'is-listening' : ''}`}
+            className={`icon-btn mic-btn ${isListening ? 'is-listening' : ''} ${handsFree ? 'is-hands-free' : ''}`}
             id="mic-button"
             onClick={toggleVoiceInput}
             disabled={loading}
-            aria-label={isListening ? 'กำลังฟังเสียง... คลิกเพื่อหยุด' : 'พูดคำถาม (สั่งการด้วยเสียง)'}
-            title={isListening ? 'กำลังฟังเสียง... คลิกเพื่อหยุด' : 'พูดคำถามด้วยเสียง (Voice Input)'}
+            aria-label={handsFree ? 'โหมดคุยอัตโนมัติเปิดอยู่ คลิกเพื่อปิด' : isListening ? 'กำลังฟังเสียง... คลิกเพื่อหยุด' : 'พูดคำถาม (สั่งการด้วยเสียง)'}
+            title={handsFree ? 'โหมดคุยอัตโนมัติเปิดอยู่ (คลิกเพื่อปิด)' : isListening ? 'กำลังฟังเสียง... คลิกเพื่อหยุด' : 'พูดคำถามด้วยเสียง (Voice Input)'}
           >
             <Icon.Mic />
           </button>

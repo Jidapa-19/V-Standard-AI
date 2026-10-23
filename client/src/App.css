@@ -532,6 +532,124 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 .preview-remove svg { width: 12px; height: 12px; stroke: #FFFFFF; }
 .preview-remove:hover { background: var(--danger); transform: scale(1.1); }
 
+/* Voice control bar: Hands-free & Cute Voice controls */
+.voice-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+.voice-mode-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: var(--text);
+  transition: stroke 0.2s ease, transform 0.2s ease;
+}
+.voice-mode-btn:hover {
+  background: #FFF0F5;
+  border-color: var(--btn-bg);
+  color: var(--text-heading);
+}
+.voice-mode-btn:hover svg {
+  stroke: var(--text-heading);
+}
+
+.voice-mode-btn.is-active {
+  background: linear-gradient(135deg, #FFF0F5 0%, #FFE4EE 100%);
+  border-color: var(--btn-bg);
+  color: var(--text-heading);
+  box-shadow: 0 2px 10px rgba(234, 175, 199, 0.45);
+}
+.voice-mode-btn.is-active svg {
+  stroke: #C2255C;
+  transform: scale(1.1);
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #A898A3;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+}
+.status-indicator.live {
+  background: #10B981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.35);
+  animation: live-pulse 1.4s infinite ease-in-out;
+}
+@keyframes live-pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.test-voice-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-heading);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+.test-voice-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: #EAAFC7;
+  transition: transform 0.2s ease, fill 0.2s ease;
+}
+.test-voice-btn:hover {
+  background: #FFF0F5;
+  border-color: var(--btn-bg);
+  transform: translateY(-1px);
+}
+.test-voice-btn:hover svg {
+  fill: #C2255C;
+}
+.test-voice-btn.is-playing {
+  background: #FFE4EE;
+  border-color: var(--btn-bg);
+  animation: pulse-cute 1.2s infinite ease-in-out;
+}
+.test-voice-btn.is-playing svg {
+  fill: #C2255C;
+  animation: spin-sparkle 1.8s infinite linear;
+}
+@keyframes spin-sparkle {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.2); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+@keyframes pulse-cute {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(234, 175, 199, 0.6); }
+  50% { box-shadow: 0 0 0 6px rgba(234, 175, 199, 0); }
+}
+
 /* Composer Box: การ์ดสีขาว ขอบสีชมพูพาสเทล */
 .composer {
   display: flex;
@@ -582,6 +700,14 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 .composer .mic-btn.is-listening svg {
   stroke: #C2255C !important;
   transform: scale(1.1);
+}
+.composer .mic-btn.is-hands-free {
+  background: #FFF0F5 !important;
+  border-radius: 12px;
+  box-shadow: 0 0 0 2px var(--btn-bg);
+}
+.composer .mic-btn.is-hands-free svg {
+  stroke: #C2255C !important;
 }
 @keyframes pulse-mic {
   0% { box-shadow: 0 0 0 0 rgba(234, 175, 199, 0.7); }
