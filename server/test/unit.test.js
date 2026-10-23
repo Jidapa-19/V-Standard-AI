@@ -302,3 +302,44 @@ describe('error handling', () => {
     await s.close();
   });
 });
+
+describe('Admin Knowledge Management API', () => {
+  let srv;
+  before(async () => {
+    srv = await startServer({ reply: good() });
+  });
+  after(() => srv.close());
+
+  test('verify PIN rejects incorrect PIN', async () => {
+    const res = await fetch(`${srv.base}/api/admin/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: 'wrong' }),
+    });
+    assert.equal(res.status, 401);
+  });
+
+  test('verify PIN accepts correct PIN', async () => {
+    const res = await fetch(`${srv.base}/api/admin/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: 'admin1234' }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+  });
+
+  test('GET /api/admin/course requires PIN header', async () => {
+    const unauthorized = await fetch(`${srv.base}/api/admin/course`);
+    assert.equal(unauthorized.status, 401);
+
+    const authorized = await fetch(`${srv.base}/api/admin/course`, {
+      headers: { 'x-admin-pin': 'admin1234' },
+    });
+    assert.equal(authorized.status, 200);
+    const body = await authorized.json();
+    assert.ok(Array.isArray(body.facts));
+    assert.ok(body.facts.length > 0);
+  });
+});

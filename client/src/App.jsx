@@ -84,6 +84,18 @@ const Icon = {
   VolumeStop: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" x2="17" y1="9" y2="15" /><line x1="17" x2="23" y1="9" y2="15" /></svg>
   ),
+  Shield: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+  ),
+  Edit: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+  ),
+  Plus: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+  ),
+  Lock: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+  ),
 };
 
 /* ---------- Message bubble ---------- */
@@ -196,6 +208,454 @@ function createInitialGreeting() {
   };
 }
 
+/* ---------- Admin Knowledge Management Modal ---------- */
+const CATEGORY_OPTIONS = [
+  'ข้อมูลทั่วไป',
+  'ข้อเน้นย้ำ',
+  'ข้อควรระวังที่จะทำให้ไม่ผ่าน',
+];
+
+function AdminModal({ isOpen, onClose, onCourseUpdated }) {
+  const [pin, setPin] = useState(() => sessionStorage.getItem('aia_admin_pin') || '');
+  const [isAuth, setIsAuth] = useState(() => Boolean(sessionStorage.getItem('aia_admin_pin')));
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [pinLoading, setPinLoading] = useState(false);
+
+  const [courseData, setCourseData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [activeTab, setActiveTab] = useState('facts'); // 'facts' | 'general'
+  const [categoryFilter, setCategoryFilter] = useState('ทั้งหมด');
+  const [search, setSearch] = useState('');
+
+  // Fact Editor state
+  const [editingFactId, setEditingFactId] = useState(null);
+  const [factForm, setFactForm] = useState({ id: '', category: 'ข้อเน้นย้ำ', topic: '', value: '' });
+  const [isAdding, setIsAdding] = useState(false);
+
+  // Fetch course data when authenticated and open
+  const loadData = useCallback(async (currentPin) => {
+    const authPin = currentPin || pin;
+    if (!authPin) return;
+    setLoading(true);
+    setNotice('');
+    try {
+      const res = await fetch('/api/admin/course', {
+        headers: { 'x-admin-pin': authPin },
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setIsAuth(false);
+          sessionStorage.removeItem('aia_admin_pin');
+          setPin('');
+          setPinError('เซสชันแอดมินหมดอายุ กรุณาเข้าสู่ระบบใหม่ค่ะ');
+          return;
+        }
+        throw new Error('ไม่สามารถโหลดข้อมูลหลักสูตรได้');
+      }
+      const data = await res.json();
+      setCourseData(data);
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [pin]);
+
+  useEffect(() => {
+    if (isOpen && isAuth) {
+      loadData(pin);
+    }
+  }, [isOpen, isAuth, loadData, pin]);
+
+  if (!isOpen) return null;
+
+  const handleVerifyPin = async (e) => {
+    e.preventDefault();
+    if (!pinInput.trim()) return;
+    setPinLoading(true);
+    setPinError('');
+    try {
+      const res = await fetch('/api/admin/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'รหัส PIN ไม่ถูกต้องค่ะ');
+      }
+      sessionStorage.setItem('aia_admin_pin', pinInput.trim());
+      setPin(pinInput.trim());
+      setIsAuth(true);
+      setPinInput('');
+      loadData(pinInput.trim());
+    } catch (err) {
+      setPinError(err.message);
+    } finally {
+      setPinLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem('aia_admin_pin');
+    setPin('');
+    setIsAuth(false);
+    setCourseData(null);
+    setNotice('');
+  };
+
+  const handleSaveCourse = async () => {
+    if (!courseData) return;
+    setSaving(true);
+    setNotice('');
+    try {
+      const res = await fetch('/api/admin/course', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-pin': pin,
+        },
+        body: JSON.stringify(courseData),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'บันทึกข้อมูลไม่สำเร็จค่ะ');
+      }
+      setNotice('✅ บันทึกข้อมูลหลักสูตรเรียบร้อยแล้ว! ระบบ AI อัปเดตข้อมูลทันที');
+      onCourseUpdated?.(courseData);
+    } catch (err) {
+      setNotice(`❌ ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startEditFact = (fact) => {
+    setIsAdding(false);
+    setEditingFactId(fact.id);
+    setFactForm({ ...fact });
+  };
+
+  const startAddFact = () => {
+    setEditingFactId(null);
+    setIsAdding(true);
+    setFactForm({
+      id: `fact_${Date.now().toString(36)}`,
+      category: categoryFilter !== 'ทั้งหมด' ? categoryFilter : 'ข้อเน้นย้ำ',
+      topic: '',
+      value: '',
+    });
+  };
+
+  const cancelFactForm = () => {
+    setEditingFactId(null);
+    setIsAdding(false);
+    setFactForm({ id: '', category: 'ข้อเน้นย้ำ', topic: '', value: '' });
+  };
+
+  const saveFactItem = (e) => {
+    e.preventDefault();
+    if (!factForm.topic.trim() || !factForm.value.trim()) {
+      setNotice('กรุณากรอกหัวข้อและเนื้อหาให้ครบถ้วนค่ะ');
+      return;
+    }
+    const cleanId = factForm.id.trim() || `fact_${Date.now().toString(36)}`;
+
+    setCourseData((prev) => {
+      if (!prev) return prev;
+      let newFacts;
+      if (editingFactId) {
+        newFacts = prev.facts.map((f) => (f.id === editingFactId ? { ...factForm, id: cleanId } : f));
+      } else {
+        newFacts = [{ ...factForm, id: cleanId }, ...prev.facts];
+      }
+      return { ...prev, facts: newFacts };
+    });
+
+    cancelFactForm();
+    setNotice('💡 รายการได้รับการแก้ไขในแบบร่าง อย่าลืมกด "บันทึกข้อมูลหลักสูตร" ด้านล่างนะคะ');
+  };
+
+  const deleteFact = (id) => {
+    if (!window.confirm('ต้องการลบข้อมูลรายการนี้ใช่ไหม?')) return;
+    setCourseData((prev) => {
+      if (!prev) return prev;
+      return { ...prev, facts: prev.facts.filter((f) => f.id !== id) };
+    });
+    setNotice('💡 ลบรายการในแบบร่างแล้ว อย่าลืมกด "บันทึกข้อมูลหลักสูตร" ด้านล่างนะคะ');
+  };
+
+  const filteredFacts = (courseData?.facts || []).filter((f) => {
+    const matchCategory = categoryFilter === 'ทั้งหมด' || f.category === categoryFilter;
+    const matchSearch =
+      !search ||
+      f.topic.toLowerCase().includes(search.toLowerCase()) ||
+      f.value.toLowerCase().includes(search.toLowerCase()) ||
+      f.id.toLowerCase().includes(search.toLowerCase());
+    return matchCategory && matchSearch;
+  });
+
+  return (
+    <div className="admin-overlay" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+      <div className="admin-modal">
+        {!isAuth ? (
+          /* PIN Entry Screen */
+          <div className="admin-pin-box">
+            <div className="admin-pin-icon" aria-hidden="true">
+              <Icon.Lock />
+            </div>
+            <h2 id="admin-title">ระบบจัดการหลักสูตร (แอดมิน)</h2>
+            <p className="admin-pin-desc">สำหรับวิทยากรและฝ่ายฝึกอบรม กรุณากรอกรหัส PIN เพื่อเข้าใช้งาน</p>
+            <form onSubmit={handleVerifyPin} className="admin-pin-form">
+              <input
+                type="password"
+                id="admin-pin-input"
+                placeholder="รหัส PIN (เริ่มต้น: admin1234)"
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value)}
+                autoFocus
+                maxLength={20}
+              />
+              {pinError && <div className="admin-error">{pinError}</div>}
+              <div className="admin-pin-actions">
+                <button type="button" className="btn-secondary" onClick={onClose}>
+                  ยกเลิก
+                </button>
+                <button type="submit" className="btn-primary" disabled={pinLoading}>
+                  {pinLoading ? 'กำลังตรวจสอบ...' : 'เข้าสู่ระบบ'}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : (
+          /* Main Admin Knowledge Management Dashboard */
+          <>
+            <header className="admin-header">
+              <div className="admin-brand">
+                <div className="admin-badge-icon" aria-hidden="true"><Icon.Shield /></div>
+                <div>
+                  <h2 id="admin-title">จัดการข้อมูลหลักสูตร (Admin Knowledge)</h2>
+                  <p className="admin-sub">วิทยากรและฝ่ายฝึกอบรม • แก้ไขข้อมูลและส่งผลต่อ AI ทันที</p>
+                </div>
+              </div>
+              <button type="button" className="admin-close" onClick={onClose} aria-label="ปิดหน้าต่างแอดมิน">
+                <Icon.Close />
+              </button>
+            </header>
+
+            <nav className="admin-nav">
+              <button
+                type="button"
+                className={`admin-nav-btn ${activeTab === 'facts' ? 'is-active' : ''}`}
+                onClick={() => setActiveTab('facts')}
+              >
+                📚 ข้อเท็จจริงหลักสูตร ({courseData?.facts?.length || 0})
+              </button>
+              <button
+                type="button"
+                className={`admin-nav-btn ${activeTab === 'general' ? 'is-active' : ''}`}
+                onClick={() => setActiveTab('general')}
+              >
+                ⚙️ ข้อมูลทั่วไป & คำปฏิเสธ
+              </button>
+            </nav>
+
+            <div className="admin-body">
+              {notice && <div className="admin-notice" role="alert">{notice}</div>}
+
+              {loading ? (
+                <div className="admin-loading">กำลังโหลดข้อมูลหลักสูตร...</div>
+              ) : activeTab === 'general' ? (
+                /* General Settings Tab */
+                <div className="admin-section">
+                  <div className="admin-field">
+                    <label htmlFor="course-name-input">ชื่อหลักสูตร (Course Name):</label>
+                    <input
+                      id="course-name-input"
+                      type="text"
+                      value={courseData?.courseName || ''}
+                      onChange={(e) =>
+                        setCourseData((prev) => prev ? { ...prev, courseName: e.target.value } : prev)
+                      }
+                      placeholder="เช่น มาตรฐานพนักงาน (V)"
+                    />
+                  </div>
+                  <div className="admin-field">
+                    <label htmlFor="refusal-msg-input">ข้อความตอบปฏิเสธเมื่ออยู่นอกหลักสูตร (Refusal Message):</label>
+                    <textarea
+                      id="refusal-msg-input"
+                      rows={3}
+                      value={courseData?.refusalMessage || ''}
+                      onChange={(e) =>
+                        setCourseData((prev) => prev ? { ...prev, refusalMessage: e.target.value } : prev)
+                      }
+                      placeholder="ข้อความที่ AI จะใช้ตอบปฏิเสธอย่างสุภาพเมื่อผู้ใช้ถามเรื่องนอกหลักสูตร"
+                    />
+                  </div>
+                </div>
+              ) : (
+                /* Facts Management Tab */
+                <div className="admin-facts-tab">
+                  {/* Toolbar */}
+                  <div className="admin-toolbar">
+                    <div className="admin-filters">
+                      {['ทั้งหมด', ...CATEGORY_OPTIONS].map((cat) => (
+                        <button
+                          key={cat}
+                          type="button"
+                          className={`cat-pill ${categoryFilter === cat ? 'is-active' : ''}`}
+                          onClick={() => setCategoryFilter(cat)}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="admin-toolbar-right">
+                      <input
+                        type="text"
+                        className="admin-search"
+                        placeholder="🔍 ค้นหาหัวข้อ / เนื้อหา..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                      {!isAdding && !editingFactId && (
+                        <button type="button" className="btn-add-fact" onClick={startAddFact}>
+                          <Icon.Plus />
+                          <span>เพิ่มข้อมูลใหม่</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Fact Add / Edit Form */}
+                  {(isAdding || editingFactId) && (
+                    <form onSubmit={saveFactItem} className="fact-editor-card">
+                      <h3>{editingFactId ? '✏️ แก้ไขข้อมูล' : '✨ เพิ่มข้อมูลหลักสูตรใหม่'}</h3>
+                      <div className="editor-grid">
+                        <div className="admin-field">
+                          <label>หมวดหมู่:</label>
+                          <select
+                            value={factForm.category}
+                            onChange={(e) => setFactForm({ ...factForm, category: e.target.value })}
+                          >
+                            {CATEGORY_OPTIONS.map((c) => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="admin-field">
+                          <label>รหัสอ้างอิง (ID):</label>
+                          <input
+                            type="text"
+                            value={factForm.id}
+                            onChange={(e) => setFactForm({ ...factForm, id: e.target.value })}
+                            placeholder="เช่น checkin_time"
+                            required
+                          />
+                        </div>
+                        <div className="admin-field full">
+                          <label>หัวข้อ (Topic):</label>
+                          <input
+                            type="text"
+                            value={factForm.topic}
+                            onChange={(e) => setFactForm({ ...factForm, topic: e.target.value })}
+                            placeholder="เช่น เวลาเช็คอิน, การแต่งกาย, การเปิดกล้อง"
+                            required
+                          />
+                        </div>
+                        <div className="admin-field full">
+                          <label>เนื้อหา / รายละเอียด (Value):</label>
+                          <textarea
+                            rows={2}
+                            value={factForm.value}
+                            onChange={(e) => setFactForm({ ...factForm, value: e.target.value })}
+                            placeholder="ระบุข้อเท็จจริงที่ชัดเจน เช่น 08.30 น. หรือ ต้องใส่ชุดพนักงานร้านเซเว่น"
+                            required
+                          />
+                        </div>
+                      </div>
+                      <div className="editor-actions">
+                        <button type="button" className="btn-secondary" onClick={cancelFactForm}>
+                          ยกเลิก
+                        </button>
+                        <button type="submit" className="btn-primary">
+                          {editingFactId ? 'อัปเดตรายการนี้' : 'เพิ่มรายการนี้'}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Facts Cards List */}
+                  <div className="facts-list">
+                    {filteredFacts.length === 0 ? (
+                      <div className="facts-empty">ไม่พบข้อมูลที่ตรงกับเงื่อนไข</div>
+                    ) : (
+                      filteredFacts.map((fact) => (
+                        <div key={fact.id} className="fact-item">
+                          <div className="fact-header">
+                            <span className={`fact-cat-tag cat-${fact.category.replace(/\s+/g, '-')}`}>
+                              {fact.category}
+                            </span>
+                            <span className="fact-id-tag">ID: {fact.id}</span>
+                          </div>
+                          <div className="fact-topic">{fact.topic}</div>
+                          <div className="fact-value">{fact.value}</div>
+                          <div className="fact-actions">
+                            <button
+                              type="button"
+                              className="fact-btn edit"
+                              onClick={() => startEditFact(fact)}
+                              title="แก้ไขรายการนี้"
+                            >
+                              <Icon.Edit />
+                              <span>แก้ไข</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="fact-btn delete"
+                              onClick={() => deleteFact(fact.id)}
+                              title="ลบรายการนี้"
+                            >
+                              <Icon.Trash />
+                              <span>ลบ</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <footer className="admin-footer">
+              <button type="button" className="btn-logout" onClick={handleLogout}>
+                ออกจากระบบแอดมิน
+              </button>
+              <div className="admin-footer-right">
+                <button type="button" className="btn-secondary" onClick={onClose}>
+                  ปิด
+                </button>
+                <button
+                  type="button"
+                  className="btn-save-all"
+                  onClick={handleSaveCourse}
+                  disabled={saving || loading}
+                >
+                  {saving ? 'กำลังบันทึก...' : '💾 บันทึกข้อมูลหลักสูตร'}
+                </button>
+              </div>
+            </footer>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- App ---------- */
 export default function App() {
   const [theme, setTheme] = useState(readStoredTheme);
@@ -203,6 +663,8 @@ export default function App() {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]); // { id, file, url }
   const [loading, setLoading] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [currentCourseName, setCurrentCourseName] = useState('มาตรฐานพนักงาน (V)');
   const [notice, setNotice] = useState('');
   const [dragging, setDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -691,10 +1153,20 @@ export default function App() {
           <div className="brand-logo" aria-hidden="true">🎓</div>
           <div>
             <h1>V-Standard AI</h1>
-            <p className="brand-sub">หลักสูตร มาตรฐานพนักงาน (V)</p>
+            <p className="brand-sub">หลักสูตร {currentCourseName}</p>
           </div>
         </div>
         <div className="topbar-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            id="admin-btn"
+            onClick={() => setIsAdminOpen(true)}
+            aria-label="จัดการหลักสูตร (แอดมิน)"
+            title="หน้าต่างแอดมินฝ่ายฝึกอบรม (Admin Knowledge Management)"
+          >
+            <Icon.Shield />
+          </button>
           <button
             type="button"
             className="icon-btn"
@@ -883,6 +1355,14 @@ export default function App() {
           <div>วางภาพที่นี่เพื่อแนบ</div>
         </div>
       )}
+
+      <AdminModal
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
+        onCourseUpdated={(data) => {
+          if (data?.courseName) setCurrentCourseName(data.courseName);
+        }}
+      />
     </div>
   );
 }

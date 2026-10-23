@@ -28,19 +28,54 @@ function deepFreeze(obj) {
 /** Loads and validates course.json from the server file system. */
 export function loadCourse(filePath) {
   const course = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  if (typeof course.courseName !== 'string' || typeof course.refusalMessage !== 'string') {
-    throw new Error('course.json: courseName and refusalMessage are required');
+  return validateCourseData(course);
+}
+
+/** Validates course data structure and returns deep-frozen object. */
+export function validateCourseData(data) {
+  if (!data || typeof data !== 'object') {
+    throw new Error('ข้อมูลหลักสูตรต้องเป็น Object ค่ะ');
   }
-  if (!Array.isArray(course.facts) || course.facts.length === 0) {
-    throw new Error('course.json: facts must be a non-empty array');
+  if (typeof data.courseName !== 'string' || !data.courseName.trim()) {
+    throw new Error('กรุณาระบุชื่อหลักสูตร (courseName) ค่ะ');
   }
+  if (typeof data.refusalMessage !== 'string' || !data.refusalMessage.trim()) {
+    throw new Error('กรุณาระบุข้อความปฏิเสธ (refusalMessage) ค่ะ');
+  }
+  if (!Array.isArray(data.facts) || data.facts.length === 0) {
+    throw new Error('รายการข้อมูลหลักสูตร (facts) ต้องไม่ว่างเปล่าค่ะ');
+  }
+  const cleanFacts = [];
   const ids = new Set();
-  for (const f of course.facts) {
-    if (!f.id || !f.topic || !f.value) throw new Error('course.json: each fact needs id, topic, value');
-    if (ids.has(f.id)) throw new Error(`course.json: duplicate fact id "${f.id}"`);
-    ids.add(f.id);
+  for (const f of data.facts) {
+    if (!f || typeof f !== 'object') throw new Error('ข้อมูลแต่ละรายการต้องเป็น Object ค่ะ');
+    const id = String(f.id || '').trim();
+    const topic = String(f.topic || '').trim();
+    const value = String(f.value || '').trim();
+    const category = String(f.category || 'ข้อมูลทั่วไป').trim();
+
+    if (!id || !topic || !value) {
+      throw new Error('ข้อมูลแต่ละรายการต้องมี id, หัวข้อ (topic) และเนื้อหา (value) ให้ครบถ้วนค่ะ');
+    }
+    if (ids.has(id)) {
+      throw new Error(`รหัสข้อมูล (id) ซ้ำกัน: "${id}"`);
+    }
+    ids.add(id);
+    cleanFacts.push({ id, category, topic, value });
   }
-  return deepFreeze(course);
+
+  return deepFreeze({
+    courseName: data.courseName.trim(),
+    refusalMessage: data.refusalMessage.trim(),
+    facts: cleanFacts,
+  });
+}
+
+/** Validates and atomically saves course data to file system. */
+export function saveCourse(filePath, courseData) {
+  const validated = validateCourseData(courseData);
+  fs.writeFileSync(filePath, JSON.stringify(validated, null, 2), 'utf8');
+  return validated;
 }
 
 const THAI_DIGITS = '๐๑๒๓๔๕๖๗๘๙';

@@ -19,6 +19,7 @@ import {
   MAX_MESSAGE_LENGTH,
   detectImageType,
   loadCourse,
+  saveCourse,
   verifyModelResult,
 } from './validation.js';
 
@@ -115,12 +116,30 @@ function parseOrigins(value, port) {
  */
 export function createApp(options = {}) {
   const port = Number(process.env.PORT || 3001);
-  const course = options.course ?? loadCourse(path.join(__dirname, 'course.json'));
+  const courseFilePath = path.join(__dirname, 'course.json');
+  let course = options.course ?? loadCourse(courseFilePath);
   const generate = options.generate ?? null;
   const allowedOrigins = options.allowedOrigins ?? parseOrigins(process.env.ALLOWED_ORIGINS, port);
   const rateLimitMax = options.rateLimitMax ?? (Number(process.env.RATE_LIMIT_PER_MINUTE) || 20);
-  const systemInstruction = buildSystemInstruction(course);
-  const responseSchema = buildResponseSchema(course);
+  let systemInstruction = buildSystemInstruction(course);
+  let responseSchema = buildResponseSchema(course);
+  const adminPin = (process.env.ADMIN_PIN || 'admin1234').trim();
+
+  function requireAdminPin(req, res, next) {
+    const headerPin = req.headers['x-admin-pin'];
+    const authHeader = req.headers.authorization;
+    let pin = headerPin;
+    if (!pin && authHeader && authHeader.startsWith('Bearer ')) {
+      pin = authHeader.slice(7);
+    }
+    if (!pin && req.body?.pin) {
+      pin = req.body.pin;
+    }
+    if (!pin || String(pin).trim() !== adminPin) {
+      return res.status(401).json({ error: 'รหัส PIN ผู้ดูแลระบบไม่ถูกต้องค่ะ', code: 'UNAUTHORIZED' });
+    }
+    next();
+  }
 
   const app = express();
   app.disable('x-powered-by');
@@ -139,12 +158,13 @@ export function createApp(options = {}) {
         if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.onrender.com')) return cb(null, true);
         return cb(new HttpError(403, 'โดเมนนี้ไม่ได้รับอนุญาตให้เรียกใช้งาน API', 'CORS_FORBIDDEN'));
       },
-      methods: ['GET', 'POST'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-pin', 'Origin', 'Accept'],
       maxAge: 600,
     }),
   );
 
-  app.use(express.json({ limit: '10kb' }));
+  app.use(express.json({ limit: '50kb' }));
 
   const chatLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -178,6 +198,41 @@ export function createApp(options = {}) {
 
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', aiConfigured: Boolean(generate), courseName: course.courseName });
+  });
+
+  /* ---------- Admin Knowledge Management Endpoints ---------- */
+  app.post('/api/admin/verify', (req, res) => {
+    const pin = String(req.body?.pin || '').trim();
+    if (!pin || pin !== adminPin) {
+      return res.status(401).json({ error: 'รหัส PIN ไม่ถูกต้องค่ะ', code: 'INVALID_PIN' });
+    }
+    res.json({ ok: true, message: 'เข้าสู่ระบบผู้ดูแลระบบสำเร็จ' });
+  });
+
+  app.get('/api/admin/course', requireAdminPin, (req, res) => {
+    res.json({
+      courseName: course.courseName,
+      refusalMessage: course.refusalMessage,
+      facts: course.facts,
+    });
+  });
+
+  app.put('/api/admin/course', requireAdminPin, (req, res) => {
+    try {
+      const updated = saveCourse(courseFilePath, req.body);
+      course = updated;
+      systemInstruction = buildSystemInstruction(course);
+      responseSchema = buildResponseSchema(course);
+
+      res.json({
+        ok: true,
+        message: 'บันทึกข้อมูลหลักสูตรเรียบร้อยแล้วค่ะ',
+        courseName: course.courseName,
+        factsCount: course.facts.length,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message, code: 'INVALID_COURSE_DATA' });
+    }
   });
 
   app.post('/api/chat', chatLimiter, upload.array('images', MAX_FILES), async (req, res, next) => {
