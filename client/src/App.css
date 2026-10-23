@@ -428,6 +428,19 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 .mini-btn:hover svg {
   stroke: var(--text);
 }
+.mini-btn.is-speaking {
+  color: var(--text-heading);
+  border-color: var(--btn-bg);
+  background: var(--surface-strong);
+}
+.mini-btn.is-speaking svg {
+  stroke: var(--text-heading);
+  animation: pulse-audio 1.2s infinite ease-in-out;
+}
+@keyframes pulse-audio {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
 
 /* Typing indicator */
 .typing {
@@ -546,6 +559,34 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 }
 .composer .attach:hover:not(:disabled) svg {
   stroke: var(--text-heading);
+}
+
+.composer .mic-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  position: relative;
+}
+.composer .mic-btn svg {
+  stroke: var(--text);
+  transition: transform 0.2s ease, stroke 0.2s ease;
+}
+.composer .mic-btn:hover:not(:disabled) svg {
+  stroke: var(--text-heading);
+}
+.composer .mic-btn.is-listening {
+  background: #FFF0F5 !important;
+  border-radius: 12px;
+  animation: pulse-mic 1.2s infinite ease-in-out;
+}
+.composer .mic-btn.is-listening svg {
+  stroke: #C2255C !important;
+  transform: scale(1.1);
+}
+@keyframes pulse-mic {
+  0% { box-shadow: 0 0 0 0 rgba(234, 175, 199, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(234, 175, 199, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(234, 175, 199, 0); }
 }
 
 .composer textarea {

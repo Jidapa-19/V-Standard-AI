@@ -72,10 +72,19 @@ const Icon = {
   Alert: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
   ),
+  Mic: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" x2="12" y1="19" y2="22" /></svg>
+  ),
+  Volume: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
+  ),
+  VolumeStop: () => (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" x2="17" y1="9" y2="15" /><line x1="17" x2="23" y1="9" y2="15" /></svg>
+  ),
 };
 
 /* ---------- Message bubble ---------- */
-function MessageBubble({ message }) {
+function MessageBubble({ message, isSpeaking, onToggleSpeak }) {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
 
@@ -125,6 +134,17 @@ function MessageBubble({ message }) {
           <div className="bubble-actions">
             <button
               type="button"
+              className={`mini-btn ${isSpeaking ? 'is-speaking' : ''}`}
+              onClick={() => onToggleSpeak?.(message.id, message.text)}
+              id={`speak-${message.id}`}
+              aria-label={isSpeaking ? 'หยุดอ่านออกเสียง' : 'ฟังเสียงอ่านคำตอบ'}
+              title={isSpeaking ? 'หยุดอ่าน' : 'ฟังเสียงอ่านคำตอบ (TTS)'}
+            >
+              {isSpeaking ? <Icon.VolumeStop /> : <Icon.Volume />}
+              <span>{isSpeaking ? 'หยุดอ่าน' : 'ฟังเสียง'}</span>
+            </button>
+            <button
+              type="button"
               className="mini-btn"
               onClick={handleCopy}
               id={`copy-${message.id}`}
@@ -149,12 +169,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [speakingId, setSpeakingId] = useState(null);
 
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
   const listEndRef = useRef(null);
   const abortRef = useRef(null);
   const objectUrlsRef = useRef(new Set());
+  const recognitionRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -169,14 +192,108 @@ export default function App() {
     listEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, loading]);
 
-  // Revoke all object URLs on unmount.
+  // Revoke object URLs and stop audio on unmount.
   useEffect(() => {
     const urls = objectUrlsRef.current;
     return () => {
       urls.forEach((u) => URL.revokeObjectURL(u));
       urls.clear();
+      window.speechSynthesis?.cancel();
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
     };
   }, []);
+
+  const toggleVoiceInput = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setNotice('เบราว์เซอร์นี้ยังไม่รองรับระบบสั่งการด้วยเสียง แนะนำให้ใช้งานบน Google Chrome หรือ Microsoft Edge ค่ะ');
+      return;
+    }
+
+    if (isListening) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'th-TH';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setNotice('🎙️ กำลังฟังเสียง... พูดคำถามได้เลยค่ะ');
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0]?.[0]?.transcript;
+        if (transcript) {
+          setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        }
+      };
+
+      recognition.onerror = (event) => {
+        setIsListening(false);
+        if (event.error === 'not-allowed') {
+          setNotice('กรุณากดอนุญาตให้เบราว์เซอร์เข้าถึงไมโครโฟนเพื่อพูดคำถามค่ะ');
+        } else if (event.error !== 'no-speech') {
+          setNotice(`ระบบรับเสียงขัดข้อง (${event.error})`);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        setNotice('');
+        textareaRef.current?.focus();
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.warn('Speech recognition start failed:', err);
+      setIsListening(false);
+    }
+  };
+
+  const toggleSpeak = (id, text) => {
+    if (!window.speechSynthesis) {
+      setNotice('เบราว์เซอร์ของคุณยังไม่รองรับระบบอ่านออกเสียงค่ะ');
+      return;
+    }
+
+    if (speakingId === id) {
+      window.speechSynthesis.cancel();
+      setSpeakingId(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    // Clean list markers for a more natural spoken voice
+    const cleanText = text.replace(/^[-\s*]+/gm, '').trim();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = 'th-TH';
+    utterance.rate = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    const thaiVoice = voices.find((v) => v.lang === 'th-TH' || v.lang.startsWith('th'));
+    if (thaiVoice) utterance.voice = thaiVoice;
+
+    utterance.onend = () => setSpeakingId(null);
+    utterance.onerror = () => setSpeakingId(null);
+
+    setSpeakingId(id);
+    window.speechSynthesis.speak(utterance);
+  };
 
   const resizeTextarea = useCallback(() => {
     const ta = textareaRef.current;
@@ -292,6 +409,14 @@ export default function App() {
     if (!messages.length && !attachments.length) return;
     if (!window.confirm('ต้องการล้างประวัติสนทนาทั้งหมดใช่ไหม?')) return;
     abortRef.current?.abort();
+    window.speechSynthesis?.cancel();
+    setSpeakingId(null);
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    setIsListening(false);
     objectUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
     objectUrlsRef.current.clear();
     setMessages([]);
@@ -396,7 +521,12 @@ export default function App() {
         )}
 
         {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            isSpeaking={speakingId === m.id}
+            onToggleSpeak={toggleSpeak}
+          />
         ))}
 
         {loading && (
@@ -470,6 +600,17 @@ export default function App() {
             title="แนบภาพ JPG, PNG, WEBP (สูงสุด 3 ภาพ ภาพละไม่เกิน 5 MB)"
           >
             <Icon.Clip />
+          </button>
+          <button
+            type="button"
+            className={`icon-btn mic-btn ${isListening ? 'is-listening' : ''}`}
+            id="mic-button"
+            onClick={toggleVoiceInput}
+            disabled={loading}
+            aria-label={isListening ? 'กำลังฟังเสียง... คลิกเพื่อหยุด' : 'พูดคำถาม (สั่งการด้วยเสียง)'}
+            title={isListening ? 'กำลังฟังเสียง... คลิกเพื่อหยุด' : 'พูดคำถามด้วยเสียง (Voice Input)'}
+          >
+            <Icon.Mic />
           </button>
           <textarea
             ref={textareaRef}
