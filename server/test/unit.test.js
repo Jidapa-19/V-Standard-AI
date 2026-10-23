@@ -401,4 +401,78 @@ describe('Admin Knowledge Management API', () => {
     });
     assert.equal(afterLogoutRes.status, 401);
   });
+
+  test('Face Database: separate admin and employee databases with full CRUD', async () => {
+    const authHeaders = {
+      'Content-Type': 'application/json',
+      'x-admin-pin': 'admin1234',
+    };
+
+    // 1. Get Admin faces
+    const adminGet = await fetch(`${srv.base}/api/admin/faces/admins`, { headers: authHeaders });
+    assert.equal(adminGet.status, 200);
+    const adminList = await adminGet.json();
+    assert.ok(Array.isArray(adminList.faces));
+    assert.ok(adminList.faces.length >= 1);
+
+    // 2. Save new Admin face
+    const adminSave = await fetch(`${srv.base}/api/admin/faces/admins`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        username: 'test_admin_new',
+        fullName: 'ทดสอบ แอดมินใหม่',
+        role: 'ผู้ช่วยวิทยากร',
+      }),
+    });
+    assert.equal(adminSave.status, 200);
+    const newAdmin = (await adminSave.json()).face;
+    assert.equal(newAdmin.username, 'test_admin_new');
+
+    // 3. Get Employee faces
+    const empGet = await fetch(`${srv.base}/api/admin/faces/employees`, { headers: authHeaders });
+    assert.equal(empGet.status, 200);
+    const empList = await empGet.json();
+    assert.ok(Array.isArray(empList.faces));
+    assert.ok(empList.faces.length >= 1);
+
+    // 4. Save new Employee face
+    const empSave = await fetch(`${srv.base}/api/admin/faces/employees`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        employeeCode: '7999999',
+        fullName: 'นายทดสอบ พนักงานใหม่',
+        branch: 'สาขาทดสอบ 999',
+        position: 'พนักงานหน้าร้าน',
+      }),
+    });
+    assert.equal(empSave.status, 200);
+    const newEmp = (await empSave.json()).face;
+    assert.equal(newEmp.employeeCode, '7999999');
+
+    // 5. Verify Employee Face Check-in
+    const empVerify = await fetch(`${srv.base}/api/admin/faces/verify-employee`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ employeeCode: '7999999' }),
+    });
+    assert.equal(empVerify.status, 200);
+    const verifyResult = await empVerify.json();
+    assert.equal(verifyResult.ok, true);
+    assert.ok(verifyResult.employee.lastVerifiedAt);
+
+    // 6. Delete created test records
+    const delAdmin = await fetch(`${srv.base}/api/admin/faces/admins/${newAdmin.id}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    });
+    assert.equal(delAdmin.status, 200);
+
+    const delEmp = await fetch(`${srv.base}/api/admin/faces/employees/${newEmp.id}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    });
+    assert.equal(delEmp.status, 200);
+  });
 });
