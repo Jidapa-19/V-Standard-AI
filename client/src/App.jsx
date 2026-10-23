@@ -23,7 +23,7 @@ function readStoredTheme() {
   } catch {
     /* storage unavailable */
   }
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  return 'light';
 }
 
 async function copyText(text) {
@@ -341,7 +341,7 @@ export default function App() {
         <div className="brand">
           <div className="brand-logo" aria-hidden="true">🎓</div>
           <div>
-            <h1>AI Instructor Assistant</h1>
+            <h1>V-Standard AI</h1>
             <p className="brand-sub">หลักสูตร มาตรฐานพนักงาน (V)</p>
           </div>
         </div>
