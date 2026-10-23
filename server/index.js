@@ -23,7 +23,6 @@ import {
   saveCourse,
   verifyModelResult,
 } from './validation.js';
-import { FaceDatabase } from './faceDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env'), quiet: true });
@@ -128,11 +127,8 @@ export function createApp(options = {}) {
   const adminUsername = (options.adminUsername ?? process.env.ADMIN_USERNAME ?? 'admin').trim();
   const adminPassword = (options.adminPassword ?? process.env.ADMIN_PASSWORD ?? 'admin1234').trim();
   const adminPin = (options.adminPin ?? process.env.ADMIN_PIN ?? 'admin1234').trim();
-  const faceDb = options.faceDb ?? new FaceDatabase(path.join(__dirname, 'data'));
-
-  // In-memory challenge & session store
-  const adminChallenges = new Map(); // challengeToken -> { username, createdAt }
-  const adminSessions = new Map(); // sessionToken -> { username, role, faceVerified, verifiedAt, expiresAt }
+  // In-memory admin session store
+  const adminSessions = new Map(); // sessionToken -> { username, role, verifiedAt, expiresAt }
 
   function requireAdminAuth(req, res, next) {
     const token =
@@ -157,12 +153,12 @@ export function createApp(options = {}) {
       pin = req.headers.authorization.slice(4);
     }
     if (pin && String(pin).trim() === adminPin) {
-      req.admin = { username: adminUsername, role: 'ฝ่ายฝึกอบรม', faceVerified: false, fallbackPin: true };
+      req.admin = { username: adminUsername, role: 'ฝ่ายฝึกอบรม', fallbackPin: true };
       return next();
     }
 
     return res.status(401).json({
-      error: 'กรุณาเข้าสู่ระบบแอดมินด้วยชื่อผู้ใช้ รหัสผ่าน และการสแกนใบหน้าค่ะ',
+      error: 'กรุณาเข้าสู่ระบบแอดมินด้วยชื่อผู้ใช้และรหัสผ่านค่ะ',
       code: 'UNAUTHORIZED',
     });
   }
@@ -226,9 +222,8 @@ export function createApp(options = {}) {
     res.json({ status: 'ok', aiConfigured: Boolean(generate), courseName: course.courseName });
   });
 
-  /* ---------- Admin Multi-Factor Authentication Endpoints ---------- */
+  /* ---------- Admin Authentication Endpoints (Username & Password) ---------- */
 
-  // Step 1: Username & Password Verification -> Issues Challenge for Face Scan
   app.post('/api/admin/login', (req, res) => {
     const user = String(req.body?.username || '').trim();
     const pass = String(req.body?.password || '').trim();
@@ -240,76 +235,12 @@ export function createApp(options = {}) {
       });
     }
 
-    const challengeToken = crypto.randomUUID();
-    adminChallenges.set(challengeToken, {
-      username: user,
-      createdAt: Date.now(),
-    });
-
-    // Cleanup old challenges
-    for (const [k, v] of adminChallenges.entries()) {
-      if (Date.now() - v.createdAt > 10 * 60 * 1000) adminChallenges.delete(k);
-    }
-
-    res.json({
-      ok: true,
-      step: 'face_scan_required',
-      challengeToken,
-      username: user,
-      message: 'ยืนยันรหัสผ่านสำเร็จ กรุณาสแกนใบหน้าเพื่อเข้าสู่ระบบค่ะ',
-    });
-  });
-
-  // Step 2: Biometric Face Scan Verification -> Issues Authenticated Session Token
-  app.post('/api/admin/verify-face', (req, res) => {
-    const token = String(req.body?.challengeToken || '').trim();
-    const challenge = adminChallenges.get(token);
-
-    if (!token || !challenge) {
-      return res.status(401).json({
-        error: 'คำขอสแกนใบหน้าหมดอายุหรือไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่ค่ะ',
-        code: 'INVALID_CHALLENGE',
-      });
-    }
-
-    if (Date.now() - challenge.createdAt > 5 * 60 * 1000) {
-      adminChallenges.delete(token);
-      return res.status(401).json({
-        error: 'เซสชันการสแกนใบหน้าหมดเวลา (เกิน 5 นาที) กรุณาเข้าสู่ระบบใหม่ค่ะ',
-        code: 'CHALLENGE_EXPIRED',
-      });
-    }
-
-    const isDemo = Boolean(req.body?.isDemo);
-    const faceImage = req.body?.faceImage;
-
-    if (!isDemo) {
-      if (!faceImage || typeof faceImage !== 'string' || !faceImage.startsWith('data:image/')) {
-        return res.status(400).json({
-          error: 'ไม่พบภาพใบหน้า กรุณาจัดตำแหน่งใบหน้าให้อยู่ในกรอบแล้วสแกนอีกครั้งค่ะ',
-          code: 'FACE_IMAGE_MISSING',
-        });
-      }
-    }
-
-    // Biometric verified
-    adminChallenges.delete(token);
-    faceDb.recordAdminVerification(challenge.username);
-    if (faceImage && !isDemo) {
-      const existing = faceDb.getAdminFaceByUsername(challenge.username);
-      if (existing) {
-        existing.facePhoto = faceImage;
-        faceDb.saveAdminFace(existing);
-      }
-    }
-
     const sessionToken = 'adm_' + crypto.randomBytes(24).toString('hex');
     const sessionData = {
-      username: challenge.username,
+      username: user,
       role: 'ฝ่ายฝึกอบรม',
-      faceVerified: true,
       verifiedAt: Date.now(),
-      expiresAt: Date.now() + 4 * 60 * 60 * 1000, // 4 hours
+      expiresAt: Date.now() + 8 * 60 * 60 * 1000, // 8 hours
     };
     adminSessions.set(sessionToken, sessionData);
 
@@ -317,11 +248,10 @@ export function createApp(options = {}) {
       ok: true,
       sessionToken,
       user: {
-        username: challenge.username,
+        username: user,
         role: 'ฝ่ายฝึกอบรม',
-        faceVerified: true,
       },
-      message: 'ยืนยันตัวตนด้วยใบหน้าสำเร็จ ยินดีต้อนรับเข้าสู่ระบบค่ะ',
+      message: 'เข้าสู่ระบบผู้ดูแลระบบสำเร็จ ยินดีต้อนรับค่ะ',
     });
   });
 
@@ -335,7 +265,6 @@ export function createApp(options = {}) {
     adminSessions.set(sessionToken, {
       username: adminUsername,
       role: 'ฝ่ายฝึกอบรม',
-      faceVerified: false,
       verifiedAt: Date.now(),
       expiresAt: Date.now() + 2 * 60 * 60 * 1000,
     });
@@ -380,69 +309,6 @@ export function createApp(options = {}) {
     } catch (err) {
       res.status(400).json({ error: err.message, code: 'INVALID_COURSE_DATA' });
     }
-  });
-
-  /* ---------- Face Database Management Endpoints (Admin & Employee Separated) ---------- */
-
-  // Admin Faces API
-  app.get('/api/admin/faces/admins', requireAdminAuth, (req, res) => {
-    res.json({ ok: true, faces: faceDb.getAdminFaces() });
-  });
-
-  app.post('/api/admin/faces/admins', requireAdminAuth, (req, res) => {
-    try {
-      const saved = faceDb.saveAdminFace(req.body);
-      res.json({ ok: true, face: saved, message: 'บันทึกข้อมูลใบหน้าแอดมินเรียบร้อยแล้วค่ะ' });
-    } catch (err) {
-      res.status(400).json({ error: err.message, code: 'INVALID_ADMIN_FACE' });
-    }
-  });
-
-  app.delete('/api/admin/faces/admins/:id', requireAdminAuth, (req, res) => {
-    const success = faceDb.deleteAdminFace(req.params.id);
-    if (!success) {
-      return res.status(404).json({ error: 'ไม่พบข้อมูลใบหน้าแอดมินที่ต้องการลบค่ะ', code: 'NOT_FOUND' });
-    }
-    res.json({ ok: true, message: 'ลบข้อมูลใบหน้าแอดมินเรียบร้อยแล้วค่ะ' });
-  });
-
-  // Employee Faces API
-  app.get('/api/admin/faces/employees', requireAdminAuth, (req, res) => {
-    res.json({ ok: true, faces: faceDb.getEmployeeFaces() });
-  });
-
-  app.post('/api/admin/faces/employees', requireAdminAuth, (req, res) => {
-    try {
-      const saved = faceDb.saveEmployeeFace(req.body);
-      res.json({ ok: true, face: saved, message: 'บันทึกข้อมูลใบหน้าพนักงานเรียบร้อยแล้วค่ะ' });
-    } catch (err) {
-      res.status(400).json({ error: err.message, code: 'INVALID_EMPLOYEE_FACE' });
-    }
-  });
-
-  app.delete('/api/admin/faces/employees/:id', requireAdminAuth, (req, res) => {
-    const success = faceDb.deleteEmployeeFace(req.params.id);
-    if (!success) {
-      return res.status(404).json({ error: 'ไม่พบข้อมูลใบหน้าพนักงานที่ต้องการลบค่ะ', code: 'NOT_FOUND' });
-    }
-    res.json({ ok: true, message: 'ลบข้อมูลใบหน้าพนักงานเรียบร้อยแล้วค่ะ' });
-  });
-
-  // Employee Face Verification (Check-in / Trainee Verification)
-  app.post('/api/admin/faces/verify-employee', requireAdminAuth, (req, res) => {
-    const code = String(req.body?.employeeCode || req.body?.id || '').trim();
-    if (!code) {
-      return res.status(400).json({ error: 'กรุณาระบุรหัสพนักงานค่ะ', code: 'MISSING_EMPLOYEE_CODE' });
-    }
-    const verified = faceDb.recordEmployeeVerification(code);
-    if (!verified) {
-      return res.status(404).json({ error: 'ไม่พบข้อมูลใบหน้าพนักงานรหัสนี้ในฐานข้อมูลค่ะ', code: 'EMPLOYEE_NOT_FOUND' });
-    }
-    res.json({
-      ok: true,
-      employee: verified,
-      message: `ยืนยันตัวตนใบหน้าพนักงาน: ${verified.fullName} สำเร็จแล้วค่ะ`,
-    });
   });
 
   app.post('/api/chat', chatLimiter, upload.array('images', MAX_FILES), async (req, res, next) => {

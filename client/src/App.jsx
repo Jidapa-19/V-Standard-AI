@@ -99,12 +99,6 @@ const Icon = {
   User: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
   ),
-  Camera: () => (
-    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>
-  ),
-  Scan: () => (
-    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><circle cx="12" cy="12" r="3" /><path d="M12 9v1" /><path d="M12 14v1" /></svg>
-  ),
   Eye: () => (
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
   ),
@@ -231,17 +225,16 @@ const CATEGORY_OPTIONS = [
 ];
 
 function AdminModal({ isOpen, onClose, onCourseUpdated }) {
-  // Auth state: 'credentials' | 'face_scan' | 'authenticated'
+  // Auth state: 'credentials' | 'authenticated'
   const [token, setToken] = useState(() => sessionStorage.getItem('aia_admin_token') || '');
   const [authStep, setAuthStep] = useState(() => (sessionStorage.getItem('aia_admin_token') ? 'authenticated' : 'credentials'));
 
-  // Step 1: Credentials
+  // Credentials login state
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
-  const [challengeToken, setChallengeToken] = useState('');
   const [userProfile, setUserProfile] = useState(() => {
     try {
       return JSON.parse(sessionStorage.getItem('aia_admin_user') || 'null');
@@ -250,23 +243,12 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
     }
   });
 
-  // Step 2: Camera & Face Scan
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const cameraStreamRef = useRef(null);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraLoading, setCameraLoading] = useState(false);
-  const [cameraError, setCameraError] = useState('');
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanSuccess, setScanSuccess] = useState(false);
-  const [scanMessage, setScanMessage] = useState('');
-
   // Course Data & Editor state
   const [courseData, setCourseData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
-  const [activeTab, setActiveTab] = useState('facts'); // 'facts' | 'general' | 'faces'
+  const [activeTab, setActiveTab] = useState('facts'); // 'facts' | 'general'
   const [categoryFilter, setCategoryFilter] = useState('ทั้งหมด');
   const [search, setSearch] = useState('');
 
@@ -274,76 +256,6 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
   const [editingFactId, setEditingFactId] = useState(null);
   const [factForm, setFactForm] = useState({ id: '', category: 'ข้อเน้นย้ำ', topic: '', value: '' });
   const [isAdding, setIsAdding] = useState(false);
-
-  // Face Database states (Admin & Employee separated)
-  const [adminFaces, setAdminFaces] = useState([]);
-  const [employeeFaces, setEmployeeFaces] = useState([]);
-  const [faceSubTab, setFaceSubTab] = useState('employees'); // 'employees' | 'admins'
-  const [faceSearch, setFaceSearch] = useState('');
-  const [isAddingFace, setIsAddingFace] = useState(false);
-  const [editingFaceId, setEditingFaceId] = useState(null);
-  const [faceForm, setFaceForm] = useState({
-    username: '',
-    fullName: '',
-    role: 'ผู้ดูแลระบบฝ่ายฝึกอบรม',
-    employeeCode: '',
-    position: 'พนักงานประจำร้าน',
-    branch: '',
-    course: 'มาตรฐานพนักงาน (V)',
-    notes: '',
-  });
-
-  // Stop camera stream safely
-  const stopCamera = useCallback(() => {
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
-      cameraStreamRef.current = null;
-    }
-    setCameraActive(false);
-    setCameraLoading(false);
-  }, []);
-
-  // Start camera stream for Face Scan
-  const startCamera = useCallback(async () => {
-    stopCamera();
-    setCameraError('');
-    setCameraLoading(true);
-    setScanMessage('กำลังเปิดกล้องเว็บแคมเพื่อสแกนใบหน้า...');
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('อุปกรณ์หรือเบราว์เซอร์นี้ยังไม่รองรับการเปิดกล้องเว็บแคมค่ะ');
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
-        audio: false,
-      });
-      cameraStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      }
-      setCameraActive(true);
-      setScanMessage('กล้องพร้อมแล้ว! กรุณามองตรงที่กล้องและกด "สแกนใบหน้า"');
-    } catch (err) {
-      console.warn('Camera access issue:', err);
-      setCameraError('ไม่สามารถเปิดกล้องได้ (เบราว์เซอร์บล็อก หรือไม่มีอุปกรณ์กล้อง)');
-      setScanMessage('สามารถเลือกใช้ "โหมดจำลองสแกนใบหน้า" ด้านล่างเพื่อทดสอบได้ค่ะ');
-    } finally {
-      setCameraLoading(false);
-    }
-  }, [stopCamera]);
-
-  // Clean up camera when leaving face_scan step or closing modal
-  useEffect(() => {
-    if (isOpen && authStep === 'face_scan') {
-      startCamera();
-    } else {
-      stopCamera();
-    }
-    return () => {
-      stopCamera();
-    };
-  }, [isOpen, authStep, startCamera, stopCamera]);
 
   // Fetch course data when authenticated and open
   const loadData = useCallback(async (currentToken) => {
@@ -378,38 +290,15 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
     }
   }, [token]);
 
-  // Fetch separated Face databases (Admins & Employees)
-  const loadFaces = useCallback(async (currentToken) => {
-    const activeToken = currentToken || token;
-    if (!activeToken) return;
-    try {
-      const [resAdmins, resEmps] = await Promise.all([
-        fetch('/api/admin/faces/admins', { headers: { 'x-admin-token': activeToken } }),
-        fetch('/api/admin/faces/employees', { headers: { 'x-admin-token': activeToken } }),
-      ]);
-      if (resAdmins.ok) {
-        const d = await resAdmins.json();
-        if (Array.isArray(d.faces)) setAdminFaces(d.faces);
-      }
-      if (resEmps.ok) {
-        const d = await resEmps.json();
-        if (Array.isArray(d.faces)) setEmployeeFaces(d.faces);
-      }
-    } catch (err) {
-      console.warn('Load faces failed:', err);
-    }
-  }, [token]);
-
   useEffect(() => {
     if (isOpen && authStep === 'authenticated') {
       loadData(token);
-      loadFaces(token);
     }
-  }, [isOpen, authStep, loadData, loadFaces, token]);
+  }, [isOpen, authStep, loadData, token]);
 
   if (!isOpen) return null;
 
-  // Step 1: Verify Username & Password
+  // Verify Username & Password and directly issue authenticated session
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
@@ -428,74 +317,17 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
       if (!res.ok) {
         throw new Error(data.error || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้องค่ะ');
       }
-      setChallengeToken(data.challengeToken);
-      setAuthStep('face_scan');
-      setScanSuccess(false);
-      setIsScanning(false);
-    } catch (err) {
-      setAuthError(err.message);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  // Step 2: Capture snapshot & Verify Face Biometric
-  const handleVerifyFace = async (isDemo = false) => {
-    if (isScanning || scanSuccess) return;
-    setIsScanning(true);
-    setScanMessage('กำลังสแกนวิเคราะห์โครงหน้าชีวมิติ...');
-    setAuthError('');
-
-    let faceImage = null;
-    if (!isDemo && videoRef.current && canvasRef.current) {
-      try {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        canvas.width = video.videoWidth || 480;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        faceImage = canvas.toDataURL('image/jpeg', 0.85);
-      } catch (e) {
-        console.warn('Snapshot capture failed:', e);
-      }
-    }
-
-    try {
-      // Smooth biometric scanning pause
-      await new Promise((r) => setTimeout(r, 700));
-
-      const res = await fetch('/api/admin/verify-face', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          challengeToken,
-          faceImage,
-          isDemo: isDemo || !faceImage,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'ยืนยันใบหน้าไม่สำเร็จ กรุณาลองใหม่อีกครั้งค่ะ');
-      }
-
-      setScanSuccess(true);
-      setScanMessage('✅ ตรวจพบใบหน้าฝ่ายฝึกอบรมถูกต้อง! กำลังเข้าสู่ระบบ...');
       sessionStorage.setItem('aia_admin_token', data.sessionToken);
       sessionStorage.setItem('aia_admin_user', JSON.stringify(data.user));
       setToken(data.sessionToken);
       setUserProfile(data.user);
       setPassword('');
-
-      setTimeout(() => {
-        stopCamera();
-        setAuthStep('authenticated');
-        loadData(data.sessionToken);
-      }, 900);
+      setAuthStep('authenticated');
+      loadData(data.sessionToken);
     } catch (err) {
-      setIsScanning(false);
-      setScanMessage(err.message);
       setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -517,7 +349,6 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
     setCourseData(null);
     setNotice('');
     setPassword('');
-    stopCamera();
   };
 
   const handleSaveCourse = async () => {
@@ -612,118 +443,6 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
     return matchCategory && matchSearch;
   });
 
-  // Face Database Handlers
-  const startAddFace = (type) => {
-    setEditingFaceId(null);
-    setIsAddingFace(true);
-    setFaceForm({
-      username: '',
-      fullName: '',
-      role: 'ผู้ดูแลระบบฝ่ายฝึกอบรม',
-      employeeCode: '',
-      position: 'พนักงานประจำร้าน',
-      branch: '',
-      course: 'มาตรฐานพนักงาน (V)',
-      notes: '',
-    });
-  };
-
-  const startEditFace = (face, type) => {
-    setIsAddingFace(false);
-    setEditingFaceId(face.id);
-    setFaceForm({ ...face });
-  };
-
-  const cancelFaceForm = () => {
-    setIsAddingFace(false);
-    setEditingFaceId(null);
-  };
-
-  const handleSaveFace = async (e) => {
-    e.preventDefault();
-    setNotice('');
-    const isEmp = faceSubTab === 'employees';
-    const endpoint = isEmp ? '/api/admin/faces/employees' : '/api/admin/faces/admins';
-    try {
-      const payload = {
-        ...faceForm,
-        id: editingFaceId || undefined,
-      };
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': token,
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'บันทึกข้อมูลใบหน้าไม่สำเร็จ');
-      setNotice(`✅ ${data.message || 'บันทึกสำเร็จ'}`);
-      cancelFaceForm();
-      loadFaces(token);
-    } catch (err) {
-      setNotice(`❌ ${err.message}`);
-    }
-  };
-
-  const handleDeleteFace = async (type, id) => {
-    if (!window.confirm('ต้องการลบข้อมูลใบหน้ารายการนี้ใช่ไหม?')) return;
-    const endpoint = type === 'employees' ? `/api/admin/faces/employees/${id}` : `/api/admin/faces/admins/${id}`;
-    try {
-      const res = await fetch(endpoint, {
-        method: 'DELETE',
-        headers: { 'x-admin-token': token },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
-      setNotice('✅ ลบข้อมูลใบหน้าเรียบร้อยแล้วค่ะ');
-      loadFaces(token);
-    } catch (err) {
-      setNotice(`❌ ${err.message}`);
-    }
-  };
-
-  const handleVerifyEmployeeCheckin = async (empCode) => {
-    try {
-      const res = await fetch('/api/admin/faces/verify-employee', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': token,
-        },
-        body: JSON.stringify({ employeeCode: empCode }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'ยืนยันตัวตนไม่สำเร็จ');
-      setNotice(`🎉 ${data.message}`);
-      loadFaces(token);
-    } catch (err) {
-      setNotice(`❌ ${err.message}`);
-    }
-  };
-
-  const filteredAdminFaces = adminFaces.filter((a) => {
-    if (!faceSearch) return true;
-    const q = faceSearch.toLowerCase();
-    return (
-      (a.username || '').toLowerCase().includes(q) ||
-      (a.fullName || '').toLowerCase().includes(q) ||
-      (a.role || '').toLowerCase().includes(q)
-    );
-  });
-
-  const filteredEmployeeFaces = employeeFaces.filter((e) => {
-    if (!faceSearch) return true;
-    const q = faceSearch.toLowerCase();
-    return (
-      (e.employeeCode || '').toLowerCase().includes(q) ||
-      (e.fullName || '').toLowerCase().includes(q) ||
-      (e.branch || '').toLowerCase().includes(q) ||
-      (e.position || '').toLowerCase().includes(q)
-    );
-  });
-
   return (
     <div className="admin-overlay" role="dialog" aria-modal="true" aria-labelledby="admin-title">
       <div className="admin-modal">
@@ -786,96 +505,10 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
                   ยกเลิก
                 </button>
                 <button type="submit" className="btn-primary" disabled={authLoading}>
-                  {authLoading ? 'กำลังตรวจสอบ...' : 'ถัดไป: สแกนใบหน้า ➡️'}
+                  {authLoading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ 🔓'}
                 </button>
               </div>
             </form>
-          </div>
-        ) : authStep === 'face_scan' ? (
-          /* Step 2: Biometric Face Scan Verification Screen */
-          <div className="admin-auth-box face-scan-box">
-            <div className="admin-auth-icon scan-icon" aria-hidden="true">
-              <Icon.Scan />
-            </div>
-            <h2 id="admin-title">สแกนใบหน้าเพื่อยืนยันตัวตน (Face Scan)</h2>
-            <p className="admin-auth-desc">
-              ขั้นตอนที่ 2/2: กรุณามองตรงที่กล้องเว็บแคมเพื่อตรวจจับโครงหน้าผู้ดูแลระบบ
-            </p>
-
-            <div className="scanner-container">
-              <div className={`scanner-viewport ${cameraActive ? 'is-active' : ''} ${isScanning ? 'is-scanning' : ''} ${scanSuccess ? 'is-success' : ''}`}>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="scanner-video"
-                />
-                <canvas ref={canvasRef} style={{ display: 'none' }} />
-
-                {/* Face Targeting Overlay */}
-                <div className="scanner-hud" aria-hidden="true">
-                  <div className="scanner-bracket top-left" />
-                  <div className="scanner-bracket top-right" />
-                  <div className="scanner-bracket bottom-left" />
-                  <div className="scanner-bracket bottom-right" />
-                  {isScanning && <div className="scanner-laser" />}
-                  {scanSuccess && <div className="scanner-check-badge">✓</div>}
-                </div>
-
-                {cameraLoading && (
-                  <div className="scanner-overlay-msg">กำลังเชื่อมต่อกล้อง...</div>
-                )}
-                {cameraError && (
-                  <div className="scanner-overlay-msg error">{cameraError}</div>
-                )}
-              </div>
-
-              <div className="scanner-status" role="status">
-                <span className={`status-dot ${cameraActive ? 'online' : 'offline'}`} />
-                <span>{scanMessage}</span>
-              </div>
-            </div>
-
-            {authError && <div className="admin-error">{authError}</div>}
-
-            <div className="admin-face-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  stopCamera();
-                  setAuthStep('credentials');
-                }}
-                disabled={isScanning}
-              >
-                ย้อนกลับ
-              </button>
-
-              <button
-                type="button"
-                className="btn-primary btn-scan-now"
-                id="btn-scan-face"
-                onClick={() => handleVerifyFace(false)}
-                disabled={isScanning || scanSuccess || (!cameraActive && !cameraError)}
-              >
-                <Icon.Camera />
-                <span>{isScanning ? 'กำลังวิเคราะห์...' : scanSuccess ? 'ยืนยันสำเร็จ' : '📸 สแกนใบหน้าเพื่อเข้าสู่ระบบ'}</span>
-              </button>
-            </div>
-
-            {/* Fallback demo button for environments without camera */}
-            <div className="scanner-demo-row">
-              <button
-                type="button"
-                className="btn-demo-scan"
-                id="btn-demo-scan"
-                onClick={() => handleVerifyFace(true)}
-                disabled={isScanning || scanSuccess}
-              >
-                ✨ ทดสอบผ่านโหมดจำลองสแกนใบหน้า (Demo Biometric Verification)
-              </button>
-            </div>
           </div>
         ) : (
           /* Main Admin Knowledge Management Dashboard */
@@ -888,7 +521,7 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
                     <h2 id="admin-title">จัดการข้อมูลหลักสูตร (Admin Knowledge)</h2>
                     <span className="admin-user-pill">
                       <Icon.User />
-                      <span>{userProfile?.username || 'admin'} • สแกนใบหน้าแล้ว ✅</span>
+                      <span>{userProfile?.username || 'admin'} • ผู้ดูแลระบบ</span>
                     </span>
                   </div>
                   <p className="admin-sub">วิทยากรและฝ่ายฝึกอบรม • แก้ไขข้อมูลและส่งผลต่อ AI ทันที</p>
@@ -906,7 +539,6 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
                 onClick={() => {
                   setActiveTab('facts');
                   cancelFactForm();
-                  cancelFaceForm();
                 }}
               >
                 📚 ข้อเท็จจริงหลักสูตร ({courseData?.facts?.length || 0})
@@ -917,21 +549,9 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
                 onClick={() => {
                   setActiveTab('general');
                   cancelFactForm();
-                  cancelFaceForm();
                 }}
               >
                 ⚙️ ข้อมูลทั่วไป & คำปฏิเสธ
-              </button>
-              <button
-                type="button"
-                className={`admin-nav-btn ${activeTab === 'faces' ? 'is-active' : ''}`}
-                onClick={() => {
-                  setActiveTab('faces');
-                  cancelFactForm();
-                  cancelFaceForm();
-                }}
-              >
-                👤 ฐานข้อมูลใบหน้า ({employeeFaces.length + adminFaces.length})
               </button>
             </nav>
 
@@ -966,264 +586,6 @@ function AdminModal({ isOpen, onClose, onCourseUpdated }) {
                       }
                       placeholder="ข้อความที่ AI จะใช้ตอบปฏิเสธอย่างสุภาพเมื่อผู้ใช้ถามเรื่องนอกหลักสูตร"
                     />
-                  </div>
-                </div>
-              ) : activeTab === 'faces' ? (
-                /* Face Database Tab (Separated Admin & Employee databases) */
-                <div className="admin-faces-tab">
-                  {/* Face Sub-Navigation (Employees vs Admins) */}
-                  <div className="face-subnav">
-                    <button
-                      type="button"
-                      className={`face-subnav-btn ${faceSubTab === 'employees' ? 'is-active' : ''}`}
-                      onClick={() => {
-                        setFaceSubTab('employees');
-                        cancelFaceForm();
-                      }}
-                    >
-                      🏪 ใบหน้าพนักงานเข้าอบรม ({employeeFaces.length})
-                    </button>
-                    <button
-                      type="button"
-                      className={`face-subnav-btn ${faceSubTab === 'admins' ? 'is-active' : ''}`}
-                      onClick={() => {
-                        setFaceSubTab('admins');
-                        cancelFaceForm();
-                      }}
-                    >
-                      🛡️ ใบหน้าผู้ดูแลระบบ/วิทยากร ({adminFaces.length})
-                    </button>
-                  </div>
-
-                  {/* Face Toolbar */}
-                  <div className="admin-toolbar">
-                    <p className="face-tab-desc">
-                      {faceSubTab === 'employees'
-                        ? '📂 จัดเก็บแยกใน server/data/employee_faces.json • สำหรับตรวจสอบพนักงานก่อนเข้าอบรม'
-                        : '📂 จัดเก็บแยกใน server/data/admin_faces.json • สำหรับยืนยันสิทธิ์สแกนใบหน้าเข้าแดชบอร์ด'}
-                    </p>
-                    <div className="admin-toolbar-right">
-                      <input
-                        type="text"
-                        className="admin-search"
-                        placeholder={faceSubTab === 'employees' ? '🔍 ค้นหารหัสพนักงาน / ชื่อ / สาขา...' : '🔍 ค้นหา Username / ชื่อแอดมิน...'}
-                        value={faceSearch}
-                        onChange={(e) => setFaceSearch(e.target.value)}
-                      />
-                      {!isAddingFace && !editingFaceId && (
-                        <button
-                          type="button"
-                          className="btn-add-fact"
-                          onClick={() => startAddFace(faceSubTab)}
-                        >
-                          <Icon.Plus />
-                          <span>{faceSubTab === 'employees' ? 'ลงทะเบียนพนักงานใหม่' : 'ลงทะเบียนแอดมินใหม่'}</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Add / Edit Face Form */}
-                  {(isAddingFace || editingFaceId) && (
-                    <form onSubmit={handleSaveFace} className="fact-editor-card face-editor-card">
-                      <h3>{editingFaceId ? '✏️ แก้ไขข้อมูลใบหน้า' : faceSubTab === 'employees' ? '✨ ลงทะเบียนใบหน้าพนักงานใหม่' : '✨ ลงทะเบียนใบหน้าแอดมินใหม่'}</h3>
-                      <div className="editor-grid">
-                        {faceSubTab === 'employees' ? (
-                          <>
-                            <div className="admin-field">
-                              <label>รหัสพนักงาน (Employee Code):</label>
-                              <input
-                                type="text"
-                                value={faceForm.employeeCode || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, employeeCode: e.target.value })}
-                                placeholder="เช่น 7100999"
-                                required
-                              />
-                            </div>
-                            <div className="admin-field">
-                              <label>ชื่อ-นามสกุล:</label>
-                              <input
-                                type="text"
-                                value={faceForm.fullName || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, fullName: e.target.value })}
-                                placeholder="เช่น นายมานะ พากเพียร"
-                                required
-                              />
-                            </div>
-                            <div className="admin-field">
-                              <label>ตำแหน่ง:</label>
-                              <input
-                                type="text"
-                                value={faceForm.position || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, position: e.target.value })}
-                                placeholder="เช่น พนักงานประจำร้าน"
-                              />
-                            </div>
-                            <div className="admin-field">
-                              <label>สาขา / สังกัด:</label>
-                              <input
-                                type="text"
-                                value={faceForm.branch || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, branch: e.target.value })}
-                                placeholder="เช่น สาขาลาดพร้าว 101"
-                              />
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="admin-field">
-                              <label>ชื่อผู้ใช้งาน (Username):</label>
-                              <input
-                                type="text"
-                                value={faceForm.username || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, username: e.target.value })}
-                                placeholder="เช่น instructor_jane"
-                                required
-                              />
-                            </div>
-                            <div className="admin-field">
-                              <label>ชื่อ-นามสกุล:</label>
-                              <input
-                                type="text"
-                                value={faceForm.fullName || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, fullName: e.target.value })}
-                                placeholder="เช่น อ.เจนจิรา มีสุข"
-                                required
-                              />
-                            </div>
-                            <div className="admin-field">
-                              <label>บทบาท (Role):</label>
-                              <input
-                                type="text"
-                                value={faceForm.role || ''}
-                                onChange={(e) => setFaceForm({ ...faceForm, role: e.target.value })}
-                                placeholder="เช่น วิทยากรประจำหลักสูตร"
-                              />
-                            </div>
-                          </>
-                        )}
-                        <div className="admin-field full">
-                          <label>หมายเหตุ / รายละเอียดเพิ่มเติม:</label>
-                          <input
-                            type="text"
-                            value={faceForm.notes || ''}
-                            onChange={(e) => setFaceForm({ ...faceForm, notes: e.target.value })}
-                            placeholder="ระบุข้อความบันทึกเพิ่มเติม"
-                          />
-                        </div>
-                      </div>
-                      <div className="editor-actions">
-                        <button type="button" className="btn-secondary" onClick={cancelFaceForm}>
-                          ยกเลิก
-                        </button>
-                        <button type="submit" className="btn-primary">
-                          {editingFaceId ? 'อัปเดตข้อมูลใบหน้า' : 'บันทึกลงฐานข้อมูล'}
-                        </button>
-                      </div>
-                    </form>
-                  )}
-
-                  {/* Face Cards Grid */}
-                  <div className="faces-grid">
-                    {faceSubTab === 'employees' ? (
-                      filteredEmployeeFaces.length === 0 ? (
-                        <div className="facts-empty">ไม่พบข้อมูลใบหน้าพนักงานที่ค้นหา</div>
-                      ) : (
-                        filteredEmployeeFaces.map((emp) => (
-                          <div key={emp.id} className="face-card">
-                            <div className="face-avatar-wrap">
-                              <img src={emp.facePhoto} alt={emp.fullName} className="face-avatar-img" />
-                              <span className={`face-status-badge ${emp.faceVerified ? 'verified' : 'pending'}`}>
-                                {emp.faceVerified ? '✓ สแกนแล้ว' : 'รอสแกน'}
-                              </span>
-                            </div>
-                            <div className="face-card-info">
-                              <div className="face-card-header">
-                                <span className="face-code-tag">รหัส: {emp.employeeCode}</span>
-                                <span className="face-branch-tag">{emp.branch}</span>
-                              </div>
-                              <h4 className="face-card-name">{emp.fullName}</h4>
-                              <p className="face-card-sub">{emp.position}</p>
-                              <div className="face-card-meta">
-                                <div>📅 ลงทะเบียน: {emp.registeredAt ? new Date(emp.registeredAt).toLocaleDateString('th-TH') : '-'}</div>
-                                <div>⚡ ตรวจล่าสุด: {emp.lastVerifiedAt ? new Date(emp.lastVerifiedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) + ' น.' : 'ยังไม่เคยยืนยัน'}</div>
-                              </div>
-                              <div className="face-card-actions">
-                                <button
-                                  type="button"
-                                  className="btn-verify-emp"
-                                  onClick={() => handleVerifyEmployeeCheckin(emp.employeeCode)}
-                                  title="จำลองสแกนใบหน้ายืนยันตัวตนพนักงานคนนี้"
-                                >
-                                  📸 สแกนยืนยันตัวตน
-                                </button>
-                                <button
-                                  type="button"
-                                  className="fact-btn edit"
-                                  onClick={() => startEditFace(emp, 'employees')}
-                                  title="แก้ไข"
-                                >
-                                  <Icon.Edit />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="fact-btn delete"
-                                  onClick={() => handleDeleteFace('employees', emp.id)}
-                                  title="ลบ"
-                                >
-                                  <Icon.Trash />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))
-                      )
-                    ) : (
-                      filteredAdminFaces.length === 0 ? (
-                        <div className="facts-empty">ไม่พบข้อมูลใบหน้าแอดมินที่ค้นหา</div>
-                      ) : (
-                        filteredAdminFaces.map((adm) => (
-                          <div key={adm.id} className="face-card admin-face-card">
-                            <div className="face-avatar-wrap">
-                              <img src={adm.facePhoto} alt={adm.fullName} className="face-avatar-img" />
-                              <span className="face-status-badge verified">✓ แอดมิน</span>
-                            </div>
-                            <div className="face-card-info">
-                              <div className="face-card-header">
-                                <span className="face-code-tag admin-tag">User: {adm.username}</span>
-                                <span className="face-branch-tag">{adm.role}</span>
-                              </div>
-                              <h4 className="face-card-name">{adm.fullName}</h4>
-                              <p className="face-card-sub">{adm.notes || 'ผู้ดูแลระบบฝ่ายฝึกอบรม'}</p>
-                              <div className="face-card-meta">
-                                <div>📅 ลงทะเบียน: {adm.registeredAt ? new Date(adm.registeredAt).toLocaleDateString('th-TH') : '-'}</div>
-                                <div>⚡ ล็อกอินล่าสุด: {adm.lastVerifiedAt ? new Date(adm.lastVerifiedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) + ' น.' : 'ยังไม่ระบุ'}</div>
-                              </div>
-                              <div className="face-card-actions">
-                                <button
-                                  type="button"
-                                  className="fact-btn edit"
-                                  onClick={() => startEditFace(adm, 'admins')}
-                                  title="แก้ไข"
-                                >
-                                  <Icon.Edit />
-                                  <span>แก้ไข</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="fact-btn delete"
-                                  onClick={() => handleDeleteFace('admins', adm.id)}
-                                  title="ลบ"
-                                >
-                                  <Icon.Trash />
-                                  <span>ลบ</span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))
-                      )
-                    )}
                   </div>
                 </div>
               ) : (

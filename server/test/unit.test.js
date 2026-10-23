@@ -352,8 +352,8 @@ describe('Admin Knowledge Management API', () => {
     assert.equal(res.status, 401);
   });
 
-  test('full 2-step auth: login -> face scan -> session token -> access course', async () => {
-    // Step 1: Login
+  test('direct admin login: username & password -> session token -> access course -> logout', async () => {
+    // Step 1: Login with correct username & password
     const loginRes = await fetch(`${srv.base}/api/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -362,117 +362,29 @@ describe('Admin Knowledge Management API', () => {
     assert.equal(loginRes.status, 200);
     const loginBody = await loginRes.json();
     assert.equal(loginBody.ok, true);
-    assert.equal(loginBody.step, 'face_scan_required');
-    assert.ok(loginBody.challengeToken);
+    assert.ok(loginBody.sessionToken);
+    assert.equal(loginBody.user.username, 'admin');
+    assert.equal(loginBody.user.role, 'ฝ่ายฝึกอบรม');
 
-    // Step 2: Face Scan Verification
-    const faceRes = await fetch(`${srv.base}/api/admin/verify-face`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        challengeToken: loginBody.challengeToken,
-        isDemo: true,
-      }),
-    });
-    assert.equal(faceRes.status, 200);
-    const faceBody = await faceRes.json();
-    assert.equal(faceBody.ok, true);
-    assert.ok(faceBody.sessionToken);
-    assert.equal(faceBody.user.faceVerified, true);
-
-    // Step 3: Access Course with session token
+    // Step 2: Access Course with session token
     const courseRes = await fetch(`${srv.base}/api/admin/course`, {
-      headers: { 'x-admin-token': faceBody.sessionToken },
+      headers: { 'x-admin-token': loginBody.sessionToken },
     });
     assert.equal(courseRes.status, 200);
     const courseBody = await courseRes.json();
     assert.ok(Array.isArray(courseBody.facts));
 
-    // Step 4: Logout
+    // Step 3: Logout
     const logoutRes = await fetch(`${srv.base}/api/admin/logout`, {
       method: 'POST',
-      headers: { 'x-admin-token': faceBody.sessionToken },
+      headers: { 'x-admin-token': loginBody.sessionToken },
     });
     assert.equal(logoutRes.status, 200);
 
-    // Step 5: Course should now be unauthorized with invalidated token
+    // Step 4: Course should now be unauthorized with invalidated token
     const afterLogoutRes = await fetch(`${srv.base}/api/admin/course`, {
-      headers: { 'x-admin-token': faceBody.sessionToken },
+      headers: { 'x-admin-token': loginBody.sessionToken },
     });
     assert.equal(afterLogoutRes.status, 401);
-  });
-
-  test('Face Database: separate admin and employee databases with full CRUD', async () => {
-    const authHeaders = {
-      'Content-Type': 'application/json',
-      'x-admin-pin': 'admin1234',
-    };
-
-    // 1. Get Admin faces
-    const adminGet = await fetch(`${srv.base}/api/admin/faces/admins`, { headers: authHeaders });
-    assert.equal(adminGet.status, 200);
-    const adminList = await adminGet.json();
-    assert.ok(Array.isArray(adminList.faces));
-    assert.ok(adminList.faces.length >= 1);
-
-    // 2. Save new Admin face
-    const adminSave = await fetch(`${srv.base}/api/admin/faces/admins`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        username: 'test_admin_new',
-        fullName: 'ทดสอบ แอดมินใหม่',
-        role: 'ผู้ช่วยวิทยากร',
-      }),
-    });
-    assert.equal(adminSave.status, 200);
-    const newAdmin = (await adminSave.json()).face;
-    assert.equal(newAdmin.username, 'test_admin_new');
-
-    // 3. Get Employee faces
-    const empGet = await fetch(`${srv.base}/api/admin/faces/employees`, { headers: authHeaders });
-    assert.equal(empGet.status, 200);
-    const empList = await empGet.json();
-    assert.ok(Array.isArray(empList.faces));
-    assert.ok(empList.faces.length >= 1);
-
-    // 4. Save new Employee face
-    const empSave = await fetch(`${srv.base}/api/admin/faces/employees`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        employeeCode: '7999999',
-        fullName: 'นายทดสอบ พนักงานใหม่',
-        branch: 'สาขาทดสอบ 999',
-        position: 'พนักงานหน้าร้าน',
-      }),
-    });
-    assert.equal(empSave.status, 200);
-    const newEmp = (await empSave.json()).face;
-    assert.equal(newEmp.employeeCode, '7999999');
-
-    // 5. Verify Employee Face Check-in
-    const empVerify = await fetch(`${srv.base}/api/admin/faces/verify-employee`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ employeeCode: '7999999' }),
-    });
-    assert.equal(empVerify.status, 200);
-    const verifyResult = await empVerify.json();
-    assert.equal(verifyResult.ok, true);
-    assert.ok(verifyResult.employee.lastVerifiedAt);
-
-    // 6. Delete created test records
-    const delAdmin = await fetch(`${srv.base}/api/admin/faces/admins/${newAdmin.id}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    });
-    assert.equal(delAdmin.status, 200);
-
-    const delEmp = await fetch(`${srv.base}/api/admin/faces/employees/${newEmp.id}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    });
-    assert.equal(delEmp.status, 200);
   });
 });
